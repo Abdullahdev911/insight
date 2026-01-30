@@ -1,13 +1,11 @@
 // hooks/useBLE.ts
-import * as ExpoDevice from 'expo-device';
-import * as Network from 'expo-network';
 import { useMemo, useState } from 'react';
-import { PermissionsAndroid, Platform } from 'react-native';
-import { BleManager, Device } from 'react-native-ble-plx';
-import { atob, btoa } from 'react-native-quick-base64'; // You might need to install this or use a polyfill
+import { Device } from 'react-native-ble-plx';
+// import * as ExpoDevice from 'expo-device';
+// import { PermissionsAndroid, Platform } from 'react-native';
+// import { atob } from 'react-native-quick-base64'; 
 
 // DEFINED UUIDS (Must match your ESP32 Firmware)
-// If you haven't defined them on ESP32 yet, use these.
 const INSIGHT_SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
 const CHAR_BATTERY_LEVEL = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
 const CHAR_IP_ADDRESS = '829a2867-275d-4886-81d3-356079d39578'; 
@@ -16,21 +14,57 @@ interface BluetoothState {
   isScanning: boolean;
   connectedDevice: Device | null;
   batteryLevel: number;
+  glassesIP: string | null; // <--- ADDED THIS
   status: 'idle' | 'scanning' | 'connecting' | 'connected' | 'error';
   error: string | null;
 }
 
 export default function useBLE() {
-  const bleManager = useMemo(() => new BleManager(), []);
+  // Mocking manager for development so it doesn't crash without Native Modules
+  const bleManager = useMemo(() => ({}), []); 
+  // const bleManager = useMemo(() => new BleManager(), []); // <--- Use this for real build
+
   const [state, setState] = useState<BluetoothState>({
     isScanning: false,
     connectedDevice: null,
     batteryLevel: 0,
+    glassesIP: null,
     status: 'idle',
     error: null,
   });
 
-  // 1. Request Permissions
+  // ============================================================
+  //  🔥 HOTWIRE MODE (ACTIVE) - FOR DEV WITHOUT HARDWARE
+  // ============================================================
+  const startScan = async () => {
+    setState(prev => ({ ...prev, isScanning: true, status: 'scanning', error: null }));
+    console.log("Hotwire: Starting mock scan...");
+
+    setTimeout(() => {
+        console.log("Hotwire: Device found, connecting...");
+        setState(prev => ({ ...prev, isScanning: false, status: 'connecting' }));
+        
+        setTimeout(() => {
+            console.log("Hotwire: Connected!");
+            setState({
+                isScanning: false,
+                connectedDevice: { 
+                    id: 'MOCK_DEVICE_001', 
+                    name: 'Insight Glasses (Sim)' 
+                } as Device,
+                batteryLevel: 88, 
+                glassesIP: "192.168.43.205", // <--- MOCK IP (Simulating Hotspot assignment)
+                status: 'connected', 
+                error: null
+            });
+        }, 1000);
+    }, 2000);
+  };
+
+  // ============================================================
+  //  📡 REAL MODE (COMMENTED OUT) - UNCOMMENT FOR PRODUCTION
+  // ============================================================
+  /*
   const requestPermissions = async () => {
     if (Platform.OS === 'android') {
       if ((ExpoDevice.platformApiLevel ?? -1) < 31) {
@@ -50,11 +84,10 @@ export default function useBLE() {
         );
       }
     }
-    return true; // iOS handles permissions via Info.plist automatically (configured in app.json)
+    return true; 
   };
 
-  // 2. Scan for "Insight" or "ESP-EYE" devices
-  const startScan = async () => {
+  const startScanReal = async () => {
     const hasPermission = await requestPermissions();
     if (!hasPermission) {
       setState(prev => ({ ...prev, error: 'Bluetooth permissions denied' }));
@@ -70,8 +103,7 @@ export default function useBLE() {
         return;
       }
 
-      // Filter: Look for a device with a specific name or Service UUID
-      if (device && (device.name?.includes("Insight") || device.name?.includes("Pixel 4a") || device.name?.includes("ESP-EYE"))) {
+      if (device && (device.name?.includes("Insight") || device.name?.includes("ESP-EYE"))) {
         bleManager.stopDeviceScan();
         setState(prev => ({ ...prev, isScanning: false, status: 'connecting' }));
         connectToDevice(device);
@@ -79,69 +111,46 @@ export default function useBLE() {
     });
   };
 
-  // 3. Connect & Handshake
   const connectToDevice = async (device: Device) => {
     try {
       const connectedDevice = await device.connect();
       await connectedDevice.discoverAllServicesAndCharacteristics();
       
-      // A. Get Phone's IP
-      const ipAddress = await Network.getIpAddressAsync();
-      console.log("Phone IP:", ipAddress);
-
-      // B. Send IP to Glasses (Write Characteristic)
-      // Note: You need to base64 encode the string for BLE
-      const ipEncoded = btoa(ipAddress); 
-      await connectedDevice.writeCharacteristicWithResponseForService(
+      // 1. READ IP ADDRESS (New Architecture)
+      // The ESP32 connected to your Hotspot and put ITS IP into this char.
+      const ipChar = await connectedDevice.readCharacteristicForService(
         INSIGHT_SERVICE_UUID,
-        CHAR_IP_ADDRESS,
-        ipEncoded
+        CHAR_IP_ADDRESS
       );
+      const glassesIP = atob(ipChar.value); 
+      console.log("Glasses found at IP:", glassesIP);
 
-      // C. Read Battery Level (Read Characteristic)
-      // Assuming the ESP32 sends a single byte or string "82"
+      // 2. READ BATTERY
       const batteryChar = await connectedDevice.readCharacteristicForService(
         INSIGHT_SERVICE_UUID,
         CHAR_BATTERY_LEVEL
       );
-      
-      // Decode battery data (depends on how you send it from ESP32)
-      // This example assumes it's a simple string "82"
       const batteryLevel = batteryChar.value ? parseInt(atob(batteryChar.value)) : 50;
 
       setState({
         isScanning: false,
         connectedDevice: connectedDevice,
         batteryLevel: batteryLevel,
+        glassesIP: glassesIP, // Store IP for WebSocket use later
         status: 'connected',
         error: null
       });
-
-      // Optional: Setup a "Monitor" to listen for battery changes in real-time
-      // setupBatteryMonitor(connectedDevice);
 
     } catch (e: any) {
       console.log("Connection Error", e);
       setState(prev => ({ ...prev, status: 'error', error: e.message }));
     }
   };
+  */
 
   return {
     startScan,
+    // startScan: startScanReal, // <--- Swap this when ready
     ...state
   };
 }
-
-// Helper for Base64 (if not using a library)
-// function btoa(str: string) {
-//     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
-//     let output = '';
-//     // ... standard implementation ...
-//     // For React Native, it is safer to install: `npm install react-native-quick-base64`
-//     // and usage: import { btoa } from 'react-native-quick-base64';
-//     return global.btoa ? global.btoa(str) : str; // Fallback
-// }
-
-// function atob(str: string) {
-//     return global.atob ? global.atob(str) : str;
-// }
