@@ -24,7 +24,7 @@ export class GeminiLiveService {
 
     // ⚡ USE THE MODEL FROM THE OFFICIAL SNIPPET
     const model = 'models/gemini-2.5-flash-native-audio-preview-12-2025';
-    
+
     // Use v1alpha for experimental/preview models
     const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
 
@@ -41,13 +41,11 @@ export class GeminiLiveService {
     this.ws.onmessage = async (event) => {
       try {
         let textData = "";
-        // Blob -> Text handling for React Native
-        if (typeof event.data === 'string') {
-            textData = event.data;
-        } else if (event.data instanceof Blob || event.data.constructor.name === 'Blob') {
-             textData = await new Response(event.data).text();
+        if (event.data && typeof event.data === 'object') {
+          textData = await new Response(event.data as any).text();
         } else {
-            return; 
+          console.error('Unexpected message type:', event.data);
+          return;
         }
 
         this.handleMessage(textData);
@@ -84,8 +82,9 @@ export class GeminiLiveService {
             },
           },
         },
-        // input_audio_transcription: { },
-        tools: [{ google_search: {} }], 
+        output_audio_transcription: {},
+        input_audio_transcription: {},
+        tools: [{ google_search: {} }],
       },
     };
     this.ws?.send(JSON.stringify(setupMessage));
@@ -101,25 +100,28 @@ export class GeminiLiveService {
 
     if (response.serverContent) {
       const content = response.serverContent;
+      console.log(content)
       const turnComplete = content.turnComplete || false;
 
       // 1. Handle Transcript
-      const transcript = content.inputAudioTranscription?.finalTranscript || 
-                         content.input_audio_transcription?.final_transcript;
+      const transcript = content.inputAudioTranscription?.finalTranscript ||
+        content.input_audio_transcription?.final_transcript;
       if (transcript && this.listeners.onTranscript) {
-          this.listeners.onTranscript(transcript);
+        this.listeners.onTranscript(transcript);
       }
 
       // 2. Handle Model Response
       if (content.modelTurn?.parts) {
+        console.log(content.modelTurn.parts)
+
         content.modelTurn.parts.forEach((part: any) => {
           // Text
           if (part.text && this.listeners.onTextResponse) {
-            this.listeners.onTextResponse(part.text, turnComplete);
+            this.listeners.onTextResponse(part.text, part.thought, turnComplete);
           }
           // Audio (Matches snippet's part.inlineData handling)
           if (part.inlineData?.mimeType?.startsWith('audio') && this.listeners.onAudioResponse) {
-            this.listeners.onAudioResponse(part.inlineData.data, turnComplete);
+            //this.listeners.onAudioResponse(part.inlineData.data, turnComplete);
           }
         });
       }
@@ -147,18 +149,21 @@ export class GeminiLiveService {
       realtime_input: { media_chunks: [{ mime_type: 'audio/pcm', data: base64Audio }] },
     }));
   }
-  
+
   sendEndTurn() {
-     if (!this.isConnected || !this.ws) return;
-     this.ws.send(JSON.stringify({ client_content: { turn_complete: true } }));
+    if (!this.isConnected || !this.ws) return;
+
+    this.ws.send(JSON.stringify({
+      realtime_input: { text: "" },
+    }));
   }
 
   on(event: string, callback: Function) {
     this.listeners[event] = callback;
   }
-  
+
   disconnect() {
-      this.ws?.close();
-      this.ws = null;
+    this.ws?.close();
+    this.ws = null;
   }
 }

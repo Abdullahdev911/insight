@@ -1,6 +1,6 @@
-import { ScrollView, Image, Text, View, ActivityIndicator, Linking, TouchableOpacity } from 'react-native';
+import { Cpu, Globe, Mic } from 'lucide-react-native';
+import { ActivityIndicator, Image, Linking, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Globe, Mic, Cpu } from 'lucide-react-native';
 import useBLE from '../hooks/useBLE';
 import useGlassesSocket from '../hooks/useGlassesSocket';
 
@@ -56,7 +56,7 @@ export default function ActiveScreen() {
             <View className="self-start bg-primary/10 px-5 py-4 rounded-2xl rounded-tl-none max-w-[95%] border border-primary/20">
                 <View className="flex-row items-center gap-2 mb-2">
                     <Cpu size={14} color="#06b6d4" />
-                    <Text className="text-primary text-[10px] uppercase font-bold">Gemini 2.0</Text>
+                    <Text className="text-primary text-[10px] uppercase font-bold">AI Response</Text>
                 </View>
                 
                 <Text className="text-white text-lg leading-7 font-medium">
@@ -64,11 +64,11 @@ export default function ActiveScreen() {
                 </Text>
 
                 {/* 5. Google Search Sources */}
-                {searchSources.length > 0 && (
+                {searchSources?.length > 0 && (
                     <View className="mt-4 pt-3 border-t border-white/10">
                         <Text className="text-white/40 text-[10px] uppercase mb-2">Verified Sources</Text>
                         <View className="flex-row flex-wrap gap-2">
-                            {searchSources.map((source, i) => (
+                            {searchSources?.map((source, i) => (
                                 <TouchableOpacity 
                                     key={i} 
                                     onPress={() => Linking.openURL(source.uri)}
