@@ -1,100 +1,105 @@
-import { Radio, Send } from 'lucide-react-native';
-import { ActivityIndicator, Image, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ScrollView, Image, Text, View, ActivityIndicator, Linking, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import useGlassesSocket from '../hooks/useGlassesSocket'; // Import the hook
+import { Globe, Mic, Cpu } from 'lucide-react-native';
+import useBLE from '../hooks/useBLE';
+import useGlassesSocket from '../hooks/useGlassesSocket';
 
 export default function ActiveScreen() {
-  // In production, this IP comes from your Global Store / Context
-  const glassesIP = "192.168.43.205"; 
-  
-  const { isConnected, isStreaming, statusMessage, images, simulateBurst } = useGlassesSocket(glassesIP);
+  const { glassesIP } = useBLE();
+  const { 
+    images, 
+    aiStatus, 
+    responseText, 
+    userTranscript, // <--- New
+    searchSources,  // <--- New
+    simulateBurst 
+  } = useGlassesSocket(glassesIP);
 
   return (
-    <SafeAreaView className="flex-1 bg-background px-5 justify-between pb-5">
+    <SafeAreaView className="flex-1 bg-black px-5">
       
-      {/* 1. Header & Connection Status */}
-      <View className="mt-5">
-        <View className="flex-row justify-between items-center mb-6">
-            <Text className="text-text font-bold text-xl">Query Console</Text>
-            <View className="flex-row items-center gap-2 bg-surfaceHighlight px-3 py-1.5 rounded-full border border-white/5">
-                <View className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
-                <Text className="text-textDim text-xs font-medium uppercase">{statusMessage}</Text>
-            </View>
-        </View>
-
-        {/* 2. Visualizer Area (The "Packet Train" Receiver) */}
-        <View className="bg-surfaceHighlight rounded-3xl p-4 min-h-[300px] border border-white/5 justify-center">
-            
-            {/* If streaming, show the images arriving in real-time */}
-            {images.length > 0 ? (
-                <View className="flex-1">
-                     <Text className="text-primary text-xs font-bold uppercase tracking-widest mb-3">
-                        Captured Context ({images.length} Frames)
-                     </Text>
-                     
-                     {/* Image Grid */}
-                     <View className="flex-row flex-wrap gap-2">
-                        {images.map((imgUri, index) => (
-                            <Image 
-                                key={index} 
-                                source={{ uri: imgUri }} 
-                                className="w-24 h-24 rounded-lg bg-black/50 border border-white/10"
-                                resizeMode="cover"
-                            />
-                        ))}
-                        {isStreaming && (
-                            <View className="w-24 h-24 rounded-lg bg-black/20 border border-white/10 items-center justify-center border-dashed">
-                                <ActivityIndicator color="#06b6d4" />
-                            </View>
-                        )}
-                     </View>
-
-                     {/* Processing State */}
-                     {!isStreaming && (
-                         <View className="mt-6 bg-primary/10 p-4 rounded-xl border border-primary/20 flex-row items-center gap-3">
-                            <ActivityIndicator size="small" color="#06b6d4" />
-                            <Text className="text-primary font-semibold">Analyzing with Gemini...</Text>
-                         </View>
-                     )}
-                </View>
-            ) : (
-                // Empty State
-                <View className="items-center opacity-50">
-                    <Radio size={48} color="#64748b" />
-                    <Text className="text-textDim mt-4 text-center">
-                        Waiting for wake word...{'\n'}
-                        <Text className="text-xs">"Hey Insight, what is this?"</Text>
-                    </Text>
-                </View>
-            )}
+      {/* 1. Header */}
+      <View className="flex-row justify-between items-center py-4 border-b border-white/10">
+        <Text className="text-white font-bold text-xl tracking-wider">INSIGHT HUD</Text>
+        <View className="bg-primary/20 px-3 py-1 rounded-full border border-primary/50">
+           <Text className="text-primary text-xs font-bold uppercase">{aiStatus}</Text>
         </View>
       </View>
-      
-      {/* 3. DEBUG CONTROLS (Since we have no hardware) */}
-      <View>
-          <Text className="text-white/20 text-xs text-center mb-2 uppercase tracking-widest">Developer Controls</Text>
-          <TouchableOpacity 
-            onPress={simulateBurst}
-            className="bg-surfaceHighlight border border-primary/30 py-3 rounded-xl items-center mb-6 active:bg-primary/10"
-          >
-            <Text className="text-primary font-bold">Simulate "Wake Word" Trigger</Text>
-          </TouchableOpacity>
 
-          {/* Chat Interface Mock */}
-          <View className="flex-row gap-3 items-center">
-            <View className="flex-1 bg-surfaceHighlight h-12 rounded-full flex-row items-center px-4 border border-white/5">
-                <TextInput 
-                    placeholder="Type a message..." 
-                    placeholderTextColor="#64748b"
-                    className="flex-1 text-white"
-                />
+      <ScrollView className="flex-1 mt-4">
+        
+        {/* 2. Visual Context (Images) */}
+        {images.length > 0 && (
+            <View className="mb-6">
+                <Text className="text-white/50 text-[10px] uppercase mb-2">Visual Context</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                    {images.map((img, i) => (
+                        <Image key={i} source={{ uri: img }} className="w-24 h-24 rounded-lg bg-white/10 mr-2" />
+                    ))}
+                </ScrollView>
             </View>
-            <TouchableOpacity className="w-12 h-12 bg-primary rounded-full items-center justify-center">
-                <Send size={20} color="#020617" />
-            </TouchableOpacity>
-          </View>
-      </View>
+        )}
 
+        {/* 3. User Input (Transcription) */}
+        {userTranscript ? (
+            <View className="self-end bg-white/10 px-4 py-3 rounded-2xl rounded-tr-none mb-6 max-w-[85%]">
+                <View className="flex-row items-center gap-2 mb-1">
+                    <Mic size={12} color="#94a3b8" />
+                    <Text className="text-white/50 text-[10px] uppercase font-bold">You</Text>
+                </View>
+                <Text className="text-white text-base leading-5">"{userTranscript}"</Text>
+            </View>
+        ) : null}
+
+        {/* 4. AI Response */}
+        {responseText ? (
+            <View className="self-start bg-primary/10 px-5 py-4 rounded-2xl rounded-tl-none max-w-[95%] border border-primary/20">
+                <View className="flex-row items-center gap-2 mb-2">
+                    <Cpu size={14} color="#06b6d4" />
+                    <Text className="text-primary text-[10px] uppercase font-bold">Gemini 2.0</Text>
+                </View>
+                
+                <Text className="text-white text-lg leading-7 font-medium">
+                    {responseText}
+                </Text>
+
+                {/* 5. Google Search Sources */}
+                {searchSources.length > 0 && (
+                    <View className="mt-4 pt-3 border-t border-white/10">
+                        <Text className="text-white/40 text-[10px] uppercase mb-2">Verified Sources</Text>
+                        <View className="flex-row flex-wrap gap-2">
+                            {searchSources.map((source, i) => (
+                                <TouchableOpacity 
+                                    key={i} 
+                                    onPress={() => Linking.openURL(source.uri)}
+                                    className="flex-row items-center gap-1 bg-black/40 px-2 py-1.5 rounded border border-white/10"
+                                >
+                                    <Globe size={10} color="#06b6d4" />
+                                    <Text className="text-blue-400 text-xs truncate max-w-[150px]" numberOfLines={1}>
+                                        {source.title}
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+                    </View>
+                )}
+            </View>
+        ) : (
+             /* Loading State */
+             images.length > 0 && (
+                 <View className="flex-row items-center gap-3 mt-4">
+                     <ActivityIndicator color="#06b6d4" />
+                     <Text className="text-white/50 italic">Analyzing visuals & web data...</Text>
+                 </View>
+             )
+        )}
+
+      </ScrollView>
+
+      {/* Dev Controls */}
+      <TouchableOpacity onPress={simulateBurst} className="py-4">
+        <Text className="text-white/20 text-center text-xs">SIMULATE TRIGGER</Text>
+      </TouchableOpacity>
     </SafeAreaView>
   );
 }

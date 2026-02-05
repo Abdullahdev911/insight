@@ -1,25 +1,32 @@
 import { useRouter } from 'expo-router';
-import { AlertCircle, Bluetooth, Scan, Zap } from 'lucide-react-native';
+import { AlertCircle, Bluetooth, Code, Scan, Zap } from 'lucide-react-native'; // Added 'Code' icon
 import { useEffect } from 'react';
 import { ActivityIndicator, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import useBLE from './hooks/useBLE'; // Import your new hook
+import useBLE from './hooks/useBLE';
+
 
 export default function BluetoothScreen() {
   const router = useRouter();
   
-  // Use the custom hook
-  const { startScan, isScanning, connectedDevice, status, error, batteryLevel } = useBLE();
+  // 1. Destructure 'startScanMock' from the hook
+  const { 
+    startScan, 
+    startScanMock, // <--- Get the hotwire function
+    isScanning, 
+    connectedDevice, 
+    status, 
+    error, 
+    batteryLevel 
+  } = useBLE();
 
   // Auto-redirect when connected
   useEffect(() => {
     if (status === 'connected') {
-      // Pass the battery level to the next screen via params or Global Store
-      // For now, we just navigate
       setTimeout(() => {
         router.replace({
             pathname: '/(tabs)/home',
-            params: { battery: batteryLevel } // We can read this in Home
+            params: { battery: batteryLevel }
         });
       }, 1000);
     }
@@ -74,16 +81,31 @@ export default function BluetoothScreen() {
             </View>
           </View>
         ) : (
-          <TouchableOpacity 
-            onPress={startScan}
-            disabled={isScanning}
-            className={`w-full border border-primary/50 py-4 rounded-2xl items-center flex-row justify-center gap-2 ${isScanning ? 'opacity-50 bg-transparent' : 'bg-surfaceHighlight'}`}
-          >
-            <Scan size={20} color="#06b6d4" />
-            <Text className="text-primary font-bold text-lg">
-                {isScanning ? "Scanning..." : "Scan for Devices"}
-            </Text>
-          </TouchableOpacity>
+          <>
+            {/* REAL SCAN BUTTON */}
+            <TouchableOpacity 
+                onPress={startScan}
+                disabled={isScanning}
+                className={`w-full border border-primary/50 py-4 rounded-2xl items-center flex-row justify-center gap-2 ${isScanning ? 'opacity-50 bg-transparent' : 'bg-surfaceHighlight'}`}
+            >
+                <Scan size={20} color="#06b6d4" />
+                <Text className="text-primary font-bold text-lg">
+                    {isScanning ? "Scanning..." : "Scan for Devices"}
+                </Text>
+            </TouchableOpacity>
+
+            {/* DEV BYPASS BUTTON */}
+            <TouchableOpacity 
+                onPress={startScanMock}
+                disabled={isScanning}
+                className="mt-6 flex-row items-center justify-center gap-2 opacity-50 active:opacity-100"
+            >
+                <Code size={14} color="#64748b" />
+                <Text className="text-textDim text-xs uppercase tracking-widest font-bold">
+                    Developer Bypass
+                </Text>
+            </TouchableOpacity>
+          </>
         )}
       </View>
     </SafeAreaView>
