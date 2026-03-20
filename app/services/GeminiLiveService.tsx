@@ -100,7 +100,7 @@ export class GeminiLiveService {
 
     if (response.serverContent) {
       const content = response.serverContent;
-      console.log(content)
+      // console.log(content)
       const turnComplete = content.turnComplete || false;
 
       // 1. Handle Transcript
