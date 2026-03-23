@@ -2,9 +2,11 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View } from 'react-native';
 import "../global.css"; // NativeWind import
+import { AppProvider } from './context/AppContext';
 
 export default function RootLayout() {
   return (
+    <AppProvider>
     <View className="flex-1 bg-background">
       <StatusBar style="light" />
       <Stack screenOptions={{ headerShown: false, animation: 'fade' }}>
@@ -12,5 +14,6 @@ export default function RootLayout() {
         <Stack.Screen name="(tabs)" />
       </Stack>
     </View>
+    </AppProvider>
   );
 }

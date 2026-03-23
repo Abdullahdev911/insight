@@ -1,45 +1,33 @@
-import React, { useState, useRef, useEffect } from 'react';
+import { Cpu,Globe, Menu, Mic, Plus, Send, X } from 'lucide-react-native';
+import React, { useRef, useState } from 'react';
 import {
-  View,
+  Animated,
+  Dimensions,
+  FlatList,
+  Image,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
   Text,
   TextInput,
   TouchableOpacity,
-  FlatList,
-  KeyboardAvoidingView,
-  Platform,
-  Animated,
-  Dimensions,
-  Image,
-  Linking,
-  Keyboard
+  View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Cpu, Globe, Mic, Menu, X, Plus, Send } from 'lucide-react-native';
-import useBLE from '../hooks/useBLE';
-import useGlassesSocket from '../hooks/useGlassesSocket';
-import useGeminiLive from '../hooks/useGeminiLive';
+import { useApp } from '../context/AppContext';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
 export default function ActiveScreen() {
-  const { glassesIP } = useBLE();
-  
-  // 1. Hardware Data (Images & Sources)
-  const { images, searchSources } = useGlassesSocket(glassesIP);
-  
-  // 2. Gemini Live API
   const { 
-    isConnected, 
-    status, 
-    userTranscript, 
-    responseText, 
-    sendText,
-    simulateBurst
-  } = useGeminiLive();
+    images, isConnected, status, userTranscript, responseText, 
+    sendText, simulateBurst, chatHistory,setChatHistory,searchSources 
+  } = useApp();
+  
+
 
   // Chat State
   const [inputText, setInputText] = useState('');
-  const [chatHistory, setChatHistory] = useState<{id: string, text: string, sender: 'user' | 'bot'}[]>([]);
   const flatListRef = useRef<FlatList>(null);
 
   // --- Sidebar Animation Logic ---
@@ -57,14 +45,12 @@ export default function ActiveScreen() {
     setIsSidebarOpen(!isSidebarOpen);
   };
 
-  // --- Message Handling ---
+
+// --- Message Handling ---
   const handleSendText = () => {
     if (!inputText.trim()) return;
     
-    // Add user message to history instantly
-    setChatHistory(prev => [...prev, { id: Date.now().toString(), text: inputText, sender: 'user' }]);
-    
-    // Send to Gemini WebSocket
+    // Just call sendText! AppContext will automatically add it to the chat history.
     if (sendText) {
       sendText(inputText);
     }
@@ -172,9 +158,8 @@ export default function ActiveScreen() {
                         <Text className="text-primary text-[10px] uppercase font-bold">Insight is typing...</Text>
                     </View>
                     <Text className="text-white text-lg leading-7 font-medium">{responseText}</Text>
-                    
                     {/* Google Search Sources (Appended when done) */}
-                    {searchSources?.length > 0 && (
+                     {searchSources?.length > 0 && (
                         <View className="mt-4 pt-3 border-t border-white/10">
                             <Text className="text-white/40 text-[10px] uppercase mb-2">Verified Sources</Text>
                             <View className="flex-row flex-wrap gap-2">
@@ -192,7 +177,7 @@ export default function ActiveScreen() {
                                 ))}
                             </View>
                         </View>
-                    )}
+                    )} 
                   </View>
                 ) : null}
               </View>

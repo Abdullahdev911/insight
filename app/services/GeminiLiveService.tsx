@@ -1,7 +1,9 @@
 /**
  * Gemini Live API Integration Service
- * Adapted from official Google GenAI SDK example
+ * Fixed for React Native WebSocket handling & CamelCase Schema
  */
+
+
 export class GeminiLiveService {
   private apiKey: string;
   private ws: WebSocket | null = null;
@@ -19,13 +21,20 @@ export class GeminiLiveService {
     this.apiKey = apiKey;
   }
 
+  private listeners: any = {
+    onTextResponse: null,
+    onAudioResponse: null,
+    onTranscript: null,
+    onError: null,
+    onConnected: null,
+    onDisconnected: null,
+    onSearchSources: null, // Add this line
+  };
+
   connect() {
     if (this.isConnected || this.ws) return;
 
-    // ⚡ USE THE MODEL FROM THE OFFICIAL SNIPPET
     const model = 'models/gemini-2.5-flash-native-audio-preview-12-2025';
-
-    // Use v1alpha for experimental/preview models
     const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
 
     console.log(`Connecting to ${model}...`);
@@ -41,10 +50,12 @@ export class GeminiLiveService {
     this.ws.onmessage = async (event) => {
       try {
         let textData = "";
-        if (event.data && typeof event.data === 'object') {
+        if (typeof event.data === 'string') {
+          textData = event.data;
+        } else if (event.data && typeof event.data === 'object') {
           textData = await new Response(event.data as any).text();
         } else {
-          console.error('Unexpected message type:', event.data);
+          console.error('Unexpected message type:', typeof event.data);
           return;
         }
 
@@ -72,12 +83,11 @@ export class GeminiLiveService {
       setup: {
         model: model,
         generation_config: {
-          // Request both so we can display text on glasses AND play audio
           response_modalities: ['AUDIO'],
           speech_config: {
             voice_config: {
               prebuilt_voice_config: {
-                voice_name: 'Zephyr', // Using 'Zephyr' from your example
+                voice_name: 'Zephyr', 
               },
             },
           },
@@ -90,7 +100,7 @@ export class GeminiLiveService {
     this.ws?.send(JSON.stringify(setupMessage));
   }
 
-  handleMessage(data: string) {
+handleMessage(data: string) {
     const response = JSON.parse(data);
 
     if (response.setupComplete) {
@@ -100,61 +110,94 @@ export class GeminiLiveService {
 
     if (response.serverContent) {
       const content = response.serverContent;
-      // console.log(content)
-      const turnComplete = content.turnComplete || false;
+      console.log(content)
 
-      // 1. Handle Transcript
+      // 1. Handle User Transcript (Mic Input)
       const transcript = content.inputAudioTranscription?.finalTranscript ||
-        content.input_audio_transcription?.final_transcript;
+                         content.input_audio_transcription?.final_transcript;
       if (transcript && this.listeners.onTranscript) {
         this.listeners.onTranscript(transcript);
       }
 
-      // 2. Handle Model Response
-      if (content.modelTurn?.parts) {
-        console.log(content.modelTurn.parts)
+      // 2. Handle AI's Spoken Text (Ignores internal "Reasoning" thoughts!)
+      if (content.outputTranscription?.text && this.listeners.onTextResponse) {
+        // Send the text, but turnComplete is false here
+        this.listeners.onTextResponse(content.outputTranscription.text, false, false);
+      }
 
+      // 3. Handle Raw Audio Payload
+      if (content.modelTurn?.parts) {
         content.modelTurn.parts.forEach((part: any) => {
-          // Text
-          if (part.text && this.listeners.onTextResponse) {
-            this.listeners.onTextResponse(part.text, part.thought, turnComplete);
-          }
-          // Audio (Matches snippet's part.inlineData handling)
           if (part.inlineData?.mimeType?.startsWith('audio') && this.listeners.onAudioResponse) {
-            //this.listeners.onAudioResponse(part.inlineData.data, turnComplete);
+            this.listeners.onAudioResponse(part.inlineData.data, false);
           }
         });
+      }
+
+      // NEW: Handle Google Search Grounding Metadata
+      const grounding = content.groundingMetadata || content.modelTurn?.groundingMetadata;
+      if (grounding?.searchEntryPoint?.renderedContent && this.listeners.onSearchSources) {
+        const html = grounding.searchEntryPoint.renderedContent;
+        const sources: {title: string, uri: string}[] = [];
+        
+        // Regex to extract the href URL and the text inside the <a> tags
+        const regex = /<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gi;
+        let match;
+        while ((match = regex.exec(html)) !== null) {
+          const uri = match[1];
+          // Clean up HTML entities (like &#39; to ')
+          const title = match[2].replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+          sources.push({ title, uri });
+        }
+        
+        if (sources.length > 0) {
+          this.listeners.onSearchSources(sources);
+        }
+      }
+
+      // 4. Handle End of Turn (This moves the active text into a chat bubble!)
+      if (content.turnComplete && this.listeners.onTextResponse) {
+        // Send an empty string, but flag turnComplete as TRUE
+        this.listeners.onTextResponse("", false, true);
       }
     }
   }
 
-  // ... (sendText, sendImage, sendAudio, sendEndTurn, on, disconnect methods remain the same)
+  // --- ALL SEND FUNCTIONS UPDATED TO STRICT CAMELCASE ---
+
   sendText(text: string) {
     if (!this.isConnected || !this.ws) return;
     this.ws.send(JSON.stringify({
-      client_content: { turns: [{ role: 'user', parts: [{ text }] }], turn_complete: true },
+      clientContent: { 
+        turns: [{ role: 'user', parts: [{ text: text }] }], 
+        turnComplete: true 
+      }
     }));
   }
 
   sendImage(base64Image: string) {
     if (!this.isConnected || !this.ws) return;
     this.ws.send(JSON.stringify({
-      realtime_input: { media_chunks: [{ mime_type: 'image/jpeg', data: base64Image }] },
+      realtimeInput: { 
+        mediaChunks: [{ mimeType: 'image/jpeg', data: base64Image }] 
+      }
     }));
   }
 
   sendAudio(base64Audio: string) {
     if (!this.isConnected || !this.ws) return;
     this.ws.send(JSON.stringify({
-      realtime_input: { media_chunks: [{ mime_type: 'audio/pcm', data: base64Audio }] },
+      realtimeInput: { 
+        mediaChunks: [{ mimeType: 'audio/pcm', data: base64Audio }] 
+      }
     }));
   }
 
   sendEndTurn() {
     if (!this.isConnected || !this.ws) return;
-
+    // Sending turnComplete tells Gemini you are done streaming audio/data
     this.ws.send(JSON.stringify({
-      realtime_input: { text: "" },
+      clientContent: { turnComplete: true }
     }));
   }
 
