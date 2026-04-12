@@ -1,8 +1,11 @@
 import { ChevronRight } from 'lucide-react-native';
 import { ScrollView, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useApp } from './../context/AppContext';
 
 export default function SettingsScreen() {
+  const { isLocationEnabled, setIsLocationEnabled } = useApp();
+  
   return (
     <SafeAreaView className="flex-1 bg-background px-5 pt-5">
       <Text className="text-text font-bold text-2xl mb-6">Settings</Text>
@@ -39,6 +42,10 @@ export default function SettingsScreen() {
                 <View className="p-4 flex-row justify-between items-center border-b border-white/5">
                     <Text className="text-text font-medium">Cloud Processing</Text>
                     <Switch trackColor={{ false: "#334155", true: "#06b6d4" }} thumbColor={"#f8fafc"} value={true} />
+                </View>
+                <View className="p-4 flex-row justify-between items-center border-b border-white/5">
+                    <Text className="text-text font-medium">Allow Location Access</Text>
+                    <Switch trackColor={{ false: "#334155", true: "#06b6d4" }} thumbColor={"#f8fafc"} value={isLocationEnabled} onValueChange={setIsLocationEnabled} />
                 </View>
                 <View className="p-4 flex-row justify-between items-center">
                     <Text className="text-text font-medium">API Key Config</Text>

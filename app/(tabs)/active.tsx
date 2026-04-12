@@ -1,4 +1,4 @@
-import { Cpu,Globe, Menu, Mic, Plus, Send, X } from 'lucide-react-native';
+import { Cpu, Globe, Menu, Mic, Plus, Send, X, Trash2 } from 'lucide-react-native';
 import React, { useRef, useState } from 'react';
 import {
   Animated,
@@ -7,11 +7,14 @@ import {
   Image,
   Keyboard,
   KeyboardAvoidingView,
+  Linking,
+  Modal,
   Platform,
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
+  Alert
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useApp } from '../context/AppContext';
@@ -19,11 +22,14 @@ import { useApp } from '../context/AppContext';
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
 export default function ActiveScreen() {
-  const { 
-    images, isConnected, status, userTranscript, responseText, 
-    sendText, simulateBurst, chatHistory,setChatHistory,searchSources 
+  const {
+    isConnected, status, userTranscript, responseText,
+    sendText, simulateBurst, chatHistory, setChatHistory, searchSources,
+    sessionHistory, createNewChat, loadChat, deleteChat
   } = useApp();
-  
+
+  const [expandedImage, setExpandedImage] = useState<string | null>(null);
+
 
 
   // Chat State
@@ -46,15 +52,15 @@ export default function ActiveScreen() {
   };
 
 
-// --- Message Handling ---
+  // --- Message Handling ---
   const handleSendText = () => {
     if (!inputText.trim()) return;
-    
+
     // Just call sendText! AppContext will automatically add it to the chat history.
     if (sendText) {
       sendText(inputText);
     }
-    
+
     setInputText('');
   };
 
@@ -62,11 +68,10 @@ export default function ActiveScreen() {
   const renderMessage = ({ item }: { item: any }) => {
     const isUser = item.sender === 'user';
     return (
-      <View className={`mb-4 max-w-[85%] px-4 py-3 ${
-        isUser 
-          ? 'bg-white/10 self-end rounded-2xl rounded-tr-sm' 
-          : 'bg-primary/10 self-start rounded-2xl rounded-tl-sm border border-primary/20'
-      }`}>
+      <View className={`mb-4 max-w-[85%] px-4 py-3 ${isUser
+        ? 'bg-white/10 self-end rounded-2xl rounded-tr-sm'
+        : 'bg-primary/10 self-start rounded-2xl rounded-tl-sm border border-primary/20'
+        }`}>
         {!isUser && (
           <View className="flex-row items-center gap-2 mb-2">
             <Cpu size={12} color="#06b6d4" />
@@ -79,7 +84,15 @@ export default function ActiveScreen() {
             <Mic size={10} color="#94a3b8" />
           </View>
         )}
-        <Text className="text-white text-base leading-6">{item.text}</Text>
+
+        {/* Inline Media Rendering */}
+        {item.imageUri && (
+          <TouchableOpacity onPress={() => setExpandedImage(item.imageUri)} activeOpacity={0.8} className="mb-2">
+            <Image source={{ uri: item.imageUri }} className="w-60 h-40 rounded-xl bg-black/40" resizeMode="cover" />
+          </TouchableOpacity>
+        )}
+
+        {item.text ? <Text className="text-white text-base leading-6">{item.text}</Text> : null}
       </View>
     );
   };
@@ -90,18 +103,18 @@ export default function ActiveScreen() {
         - iOS uses 'padding'
         - Android uses 'height' (or undefined if it still jumps weirdly)
       */}
-      <KeyboardAvoidingView 
+      <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 10 : 0} 
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 10 : 0}
       >
-        
+
         {/* Header */}
         <View className="flex-row justify-between items-center py-3 px-5 border-b border-white/10 bg-black z-10">
           <TouchableOpacity onPress={toggleSidebar} className="p-2 -ml-2">
             <Menu size={24} color="white" />
           </TouchableOpacity>
-          
+
           <View className="items-center">
             <Text className="text-white font-bold text-lg tracking-wider">INSIGHT</Text>
             <View className="flex-row items-center mt-1">
@@ -109,27 +122,17 @@ export default function ActiveScreen() {
               <Text className="text-white/50 text-[10px] uppercase">{status}</Text>
             </View>
           </View>
-          
+
           {/* Dev trigger placeholder to balance flex-row */}
           <TouchableOpacity onPress={simulateBurst} className="p-2 -mr-2">
-             <Cpu size={20} color="#333" />
+            <Cpu size={20} color="#333" />
           </TouchableOpacity>
         </View>
 
         {/* Scrollable Chat Area */}
         <View className="flex-1 px-5 pt-4">
-          
-          {/* Hardware Visual Context (Stays at the top of the chat) */}
-          {images.length > 0 && (
-            <View className="mb-6">
-                <Text className="text-white/50 text-[10px] uppercase mb-2">Visual Context</Text>
-                <View className="flex-row">
-                    {images.map((img, i) => (
-                        <Image key={i} source={{ uri: img }} className="w-20 h-20 rounded-lg bg-white/10 mr-2" />
-                    ))}
-                </View>
-            </View>
-          )}
+
+          {/* Hardware Visual Context is now Inline in the Feed. Removed Fixed Header. */}
 
           <FlatList
             ref={flatListRef}
@@ -139,7 +142,7 @@ export default function ActiveScreen() {
             showsVerticalScrollIndicator={false}
             contentContainerStyle={{ paddingBottom: 20 }}
             onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-            
+
             // Render the *active* streaming response at the bottom of the list
             ListFooterComponent={() => (
               <View>
@@ -153,31 +156,31 @@ export default function ActiveScreen() {
                 {/* Active AI Streaming Response */}
                 {responseText ? (
                   <View className="mb-4 max-w-[95%] px-5 py-4 bg-primary/10 self-start rounded-2xl rounded-tl-sm border border-primary/20">
-                     <View className="flex-row items-center gap-2 mb-2">
-                        <Cpu size={14} color="#06b6d4" />
-                        <Text className="text-primary text-[10px] uppercase font-bold">Insight is typing...</Text>
+                    <View className="flex-row items-center gap-2 mb-2">
+                      <Cpu size={14} color="#06b6d4" />
+                      <Text className="text-primary text-[10px] uppercase font-bold">Insight is typing...</Text>
                     </View>
                     <Text className="text-white text-lg leading-7 font-medium">{responseText}</Text>
                     {/* Google Search Sources (Appended when done) */}
-                     {searchSources?.length > 0 && (
-                        <View className="mt-4 pt-3 border-t border-white/10">
-                            <Text className="text-white/40 text-[10px] uppercase mb-2">Verified Sources</Text>
-                            <View className="flex-row flex-wrap gap-2">
-                                {searchSources?.map((source, i) => (
-                                    <TouchableOpacity 
-                                        key={i} 
-                                        onPress={() => Linking.openURL(source.uri)}
-                                        className="flex-row items-center gap-1 bg-black/40 px-2 py-1.5 rounded border border-white/10"
-                                    >
-                                        <Globe size={10} color="#06b6d4" />
-                                        <Text className="text-blue-400 text-xs truncate max-w-[150px]" numberOfLines={1}>
-                                            {source.title}
-                                        </Text>
-                                    </TouchableOpacity>
-                                ))}
-                            </View>
+                    {searchSources?.length > 0 && (
+                      <View className="mt-4 pt-3 border-t border-white/10">
+                        <Text className="text-white/40 text-[10px] uppercase mb-2">Verified Sources</Text>
+                        <View className="flex-row flex-wrap gap-2">
+                          {searchSources?.map((source, i) => (
+                            <TouchableOpacity
+                              key={i}
+                              onPress={() => Linking.openURL(source.uri)}
+                              className="flex-row items-center gap-1 bg-black/40 px-2 py-1.5 rounded border border-white/10"
+                            >
+                              <Globe size={10} color="#06b6d4" />
+                              <Text className="text-blue-400 text-xs truncate max-w-[150px]" numberOfLines={1}>
+                                {source.title}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
                         </View>
-                    )} 
+                      </View>
+                    )}
                   </View>
                 ) : null}
               </View>
@@ -195,12 +198,11 @@ export default function ActiveScreen() {
             onChangeText={setInputText}
             multiline
           />
-          <TouchableOpacity 
+          <TouchableOpacity
             onPress={handleSendText}
             disabled={!inputText.trim()}
-            className={`p-3 mb-0.5 rounded-full justify-center items-center ${
-              inputText.trim() ? 'bg-primary' : 'bg-white/10'
-            }`}
+            className={`p-3 mb-0.5 rounded-full justify-center items-center ${inputText.trim() ? 'bg-primary' : 'bg-white/10'
+              }`}
           >
             <Send size={20} color={inputText.trim() ? "black" : "#64748b"} />
           </TouchableOpacity>
@@ -210,15 +212,15 @@ export default function ActiveScreen() {
 
       {/* --- Sidebar Overlay --- */}
       {isSidebarOpen && (
-        <TouchableOpacity 
-          activeOpacity={1} 
-          onPress={toggleSidebar} 
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={toggleSidebar}
           className="absolute inset-0 bg-black/60 z-20"
         />
       )}
-      
+
       {/* --- Sliding Sidebar --- */}
-      <Animated.View 
+      <Animated.View
         style={{ transform: [{ translateX: slideAnim }] }}
         className="absolute top-0 bottom-0 left-0 w-3/4 max-w-[300px] bg-zinc-950 border-r border-white/10 z-30 pt-16 px-5 shadow-2xl"
       >
@@ -228,21 +230,70 @@ export default function ActiveScreen() {
             <X size={24} color="#94a3b8" />
           </TouchableOpacity>
         </View>
-        
-        <TouchableOpacity className="flex-row items-center justify-center bg-primary/20 border border-primary/50 p-4 rounded-xl mb-8">
+
+        <TouchableOpacity
+          className="flex-row items-center justify-center bg-primary/20 border border-primary/50 p-4 rounded-xl mb-8"
+          onPress={() => {
+            createNewChat();
+            toggleSidebar();
+          }}
+        >
           <Plus size={20} color="#06b6d4" />
           <Text className="text-primary ml-2 font-bold text-sm uppercase">New Chat</Text>
         </TouchableOpacity>
 
         <Text className="text-white/30 text-xs font-bold mb-4 uppercase tracking-wider">Previous</Text>
-        {/* Placeholder for actual history mapping */}
-        <TouchableOpacity className="py-4 border-b border-white/5 flex-row items-center">
-            <Text className="text-white/70 text-sm font-medium">How do I wire the ESP32?</Text>
-        </TouchableOpacity>
-        <TouchableOpacity className="py-4 border-b border-white/5 flex-row items-center">
-            <Text className="text-white/70 text-sm font-medium">Read this calculus equation</Text>
-        </TouchableOpacity>
+
+        <FlatList
+          data={sessionHistory}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => (
+            <View className="py-4 border-b border-white/5 flex-row items-center justify-between">
+              <TouchableOpacity
+                className="flex-1 mr-2"
+                onPress={() => {
+                  loadChat(item.id);
+                  toggleSidebar();
+                }}
+              >
+                <Text className="text-white/70 text-sm font-medium" numberOfLines={1}>{item.preview}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  Alert.alert(
+                    "Delete Chat",
+                    "Are you sure you want to delete this conversation?",
+                    [
+                      { text: "Cancel", style: "cancel" },
+                      { text: "Delete", style: "destructive", onPress: () => deleteChat(item.id) }
+                    ]
+                  );
+                }}
+                className="p-1"
+              >
+                <Trash2 size={16} color="#ef4444" />
+              </TouchableOpacity>
+            </View>
+          )}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={<Text className="text-white/40 italic">No previous chats.</Text>}
+        />
       </Animated.View>
+
+      {/* --- Image Lightbox Modal --- */}
+      <Modal visible={!!expandedImage} transparent={true} animationType="fade" onRequestClose={() => setExpandedImage(null)}>
+        <View className="flex-1 bg-black/95 justify-center items-center">
+          <TouchableOpacity
+            className="absolute top-12 right-6 p-2 z-50 bg-white/10 rounded-full"
+            onPress={() => setExpandedImage(null)}
+          >
+            <X size={24} color="white" />
+          </TouchableOpacity>
+          {expandedImage && (
+            <Image source={{ uri: expandedImage }} className="w-full h-full" resizeMode="contain" />
+          )}
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }

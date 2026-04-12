@@ -1,13 +1,13 @@
 /**
  * Gemini Live API Integration Service
- * Fixed for React Native WebSocket handling & CamelCase Schema
+ * FULL DUPLEX MODE - No Turns, Continuous Streaming, Native WebSockets
  */
-
 
 export class GeminiLiveService {
   private apiKey: string;
   private ws: WebSocket | null = null;
-  private isConnected: boolean = false;
+  public isConnected: boolean = false;
+
   private listeners: any = {
     onTextResponse: null,
     onAudioResponse: null,
@@ -15,190 +15,256 @@ export class GeminiLiveService {
     onError: null,
     onConnected: null,
     onDisconnected: null,
+    onSearchSources: null,
+    onToolCall: null,
   };
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
   }
 
-  private listeners: any = {
-    onTextResponse: null,
-    onAudioResponse: null,
-    onTranscript: null,
-    onError: null,
-    onConnected: null,
-    onDisconnected: null,
-    onSearchSources: null, // Add this line
-  };
-
-  connect() {
+  connect(latLng?: { latitude: number; longitude: number }) {
     if (this.isConnected || this.ws) return;
 
     const model = 'models/gemini-2.5-flash-native-audio-preview-12-2025';
     const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
 
-    console.log(`Connecting to ${model}...`);
+    console.log(`[SYS] ⏳ Connecting Raw WS to ${model}...`);
     this.ws = new WebSocket(url);
+    this.ws.binaryType = 'arraybuffer';
 
     this.ws.onopen = () => {
-      console.log('Gemini Socket Open ⚡');
+      console.log('[SYS] ✅ Gemini Socket Open ⚡');
       this.isConnected = true;
-      this.sendSetupMessage(model);
+      this.sendSetupMessage(model, latLng);
       if (this.listeners.onConnected) this.listeners.onConnected();
     };
 
     this.ws.onmessage = async (event) => {
       try {
-        let textData = "";
+        let textData = '';
         if (typeof event.data === 'string') {
           textData = event.data;
-        } else if (event.data && typeof event.data === 'object') {
-          textData = await new Response(event.data as any).text();
         } else {
-          console.error('Unexpected message type:', typeof event.data);
-          return;
+          // Because we set binaryType = 'arraybuffer', we bypass all React Native Blob limits.
+          const { Buffer } = require('buffer');
+          textData = Buffer.from(event.data as ArrayBuffer).toString('utf-8');
         }
 
         this.handleMessage(textData);
       } catch (e) {
-        console.error("Message parsing failed:", e);
+        console.error("[SYS] ❌ Message parsing failed:", e);
       }
     };
 
     this.ws.onerror = (error) => {
-      console.error('WebSocket Error:', error);
+      console.error('[SYS] ❌ WebSocket Error:', error);
       if (this.listeners.onError) this.listeners.onError(error);
     };
 
     this.ws.onclose = (e) => {
-      console.log('Gemini Disconnected:', e.code, e.reason);
+      console.log(`[SYS] 🛑 Gemini Disconnected: Code ${e.code}, Reason: ${e.reason}`);
       this.isConnected = false;
       this.ws = null;
       if (this.listeners.onDisconnected) this.listeners.onDisconnected();
     };
   }
 
-  private sendSetupMessage(model: string) {
-    const setupMessage = {
+  private sendSetupMessage(model: string, latLng?: { latitude: number; longitude: number }) {
+    const payload: any = {
       setup: {
-        model: model,
-        generation_config: {
-          response_modalities: ['AUDIO'],
-          speech_config: {
-            voice_config: {
-              prebuilt_voice_config: {
-                voice_name: 'Zephyr', 
-              },
+        model,
+        generationConfig: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Zephyr' },
             },
           },
         },
-        output_audio_transcription: {},
-        input_audio_transcription: {},
-        tools: [{ google_search: {} }],
+        outputAudioTranscription: {},
+        inputAudioTranscription: {},
+        tools: [
+          { googleSearch: {} },
+          { googleMaps: {} },
+          {
+            functionDeclarations: [
+              {
+                name: "fetchCurrentLocation",
+                description: "Fetches the user's current GPS location coordinates (latitude and longitude). Call this only when the user explicitly asks for location-based suggestions or directions.",
+                parameters: {
+                  type: "OBJECT",
+                  properties: {}
+                }
+              }
+            ]
+          }
+        ],
       },
     };
-    this.ws?.send(JSON.stringify(setupMessage));
+
+    if (latLng) {
+      payload.setup.systemInstruction = {
+        parts: [{ text: `The user's current location is latitude: ${latLng.latitude}, longitude: ${latLng.longitude}. Use this context for accurate local searches.` }]
+      };
+      payload.setup.toolConfig = {
+        retrievalConfig: {
+          latLng: {
+            latitude: latLng.latitude,
+            longitude: latLng.longitude
+          }
+        }
+      };
+    }
+
+    console.log("[TX] 📤 Sending SETUP Payload");
+    this.ws?.send(JSON.stringify(payload));
   }
 
-handleMessage(data: string) {
+  handleMessage(data: string) {
     const response = JSON.parse(data);
 
     if (response.setupComplete) {
-      console.log('Gemini Setup Complete ✅');
+      console.log('[RX] 📥 Gemini Setup Complete');
       return;
+    }
+
+    if (response.toolCall) {
+      console.log('[RX] 🛠️ toolCall received:', JSON.stringify(response.toolCall));
+      if (this.listeners.onToolCall) {
+        this.listeners.onToolCall(response.toolCall);
+      }
     }
 
     if (response.serverContent) {
       const content = response.serverContent;
-      console.log(content)
 
-      // 1. Handle User Transcript (Mic Input)
-      const transcript = content.inputAudioTranscription?.finalTranscript ||
-                         content.input_audio_transcription?.final_transcript;
-      if (transcript && this.listeners.onTranscript) {
-        this.listeners.onTranscript(transcript);
+      // 1. User Transcript
+      const transcript = content.inputTranscription?.text ||
+        content.input_transcription?.text;
+      if (transcript) {
+        console.log(`[RX] 🗣️ User: "${transcript}"`);
+        if (this.listeners.onTranscript) this.listeners.onTranscript(transcript);
       }
 
-      // 2. Handle AI's Spoken Text (Ignores internal "Reasoning" thoughts!)
-      if (content.outputTranscription?.text && this.listeners.onTextResponse) {
-        // Send the text, but turnComplete is false here
-        this.listeners.onTextResponse(content.outputTranscription.text, false, false);
+      // 2. AI Text Response
+      if (content.outputTranscription?.text) {
+        console.log(`[RX] 🤖 AI: "${content.outputTranscription.text}"`);
+        if (this.listeners.onTextResponse) {
+          this.listeners.onTextResponse(content.outputTranscription.text, false, false);
+        }
       }
 
-      // 3. Handle Raw Audio Payload
+      // 3. AI Audio Response
       if (content.modelTurn?.parts) {
         content.modelTurn.parts.forEach((part: any) => {
-          if (part.inlineData?.mimeType?.startsWith('audio') && this.listeners.onAudioResponse) {
-            this.listeners.onAudioResponse(part.inlineData.data, false);
+          if (part.inlineData?.mimeType?.startsWith('audio')) {
+            if (this.listeners.onAudioResponse) {
+              this.listeners.onAudioResponse(part.inlineData.data, false);
+            }
           }
         });
       }
 
-      // NEW: Handle Google Search Grounding Metadata
-      const grounding = content.groundingMetadata || content.modelTurn?.groundingMetadata;
-      if (grounding?.searchEntryPoint?.renderedContent && this.listeners.onSearchSources) {
-        const html = grounding.searchEntryPoint.renderedContent;
-        const sources: {title: string, uri: string}[] = [];
-        
-        // Regex to extract the href URL and the text inside the <a> tags
-        const regex = /<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gi;
-        let match;
-        while ((match = regex.exec(html)) !== null) {
-          const uri = match[1];
-          // Clean up HTML entities (like &#39; to ')
-          const title = match[2].replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&');
-          sources.push({ title, uri });
+      // 3.5 Grounding Metadata (Google Maps & Search)
+      const grounding = content.modelTurn?.groundingMetadata || content.groundingMetadata || response.candidates?.[0]?.groundingMetadata;
+      if (grounding?.groundingChunks && this.listeners.onSearchSources) {
+        const sources: { title: string; uri: string }[] = [];
+        for (const chunk of grounding.groundingChunks) {
+          if (chunk.maps) {
+            sources.push({ title: chunk.maps.title || 'Google Maps', uri: chunk.maps.uri });
+            console.log(chunk)
+          } else if (chunk.web) {
+            sources.push({ title: chunk.web.title || 'Source', uri: chunk.web.uri });
+          }
         }
-        
         if (sources.length > 0) {
+          console.log(`[RX] 🌍 Grounding Sources Received: ${sources.length}`);
           this.listeners.onSearchSources(sources);
         }
       }
 
-      // 4. Handle End of Turn (This moves the active text into a chat bubble!)
-      if (content.turnComplete && this.listeners.onTextResponse) {
-        // Send an empty string, but flag turnComplete as TRUE
-        this.listeners.onTextResponse("", false, true);
+      // 4. End of Turn (Triggers UI update to move text to history)
+      if (content.turnComplete || content.interrupted) {
+        console.log(content.interrupted ? '[RX] 🛑 AI Interrupted.' : '[RX] 🏁 AI Turn Complete.');
+        if (this.listeners.onTextResponse) this.listeners.onTextResponse("", false, true);
       }
     }
   }
 
-  // --- ALL SEND FUNCTIONS UPDATED TO STRICT CAMELCASE ---
-
-  sendText(text: string) {
-    if (!this.isConnected || !this.ws) return;
-    this.ws.send(JSON.stringify({
-      clientContent: { 
-        turns: [{ role: 'user', parts: [{ text: text }] }], 
-        turnComplete: true 
-      }
-    }));
-  }
-
   sendImage(base64Image: string) {
-    if (!this.isConnected || !this.ws) return;
-    this.ws.send(JSON.stringify({
-      realtimeInput: { 
-        mediaChunks: [{ mimeType: 'image/jpeg', data: base64Image }] 
-      }
-    }));
+    if (!this.isConnected || !this.ws || !base64Image) return;
+
+    // Strict Base64 padding shield
+    let cleanBase64 = base64Image.replace(/[^A-Za-z0-9+/=]/g, "");
+    while (cleanBase64.length % 4 !== 0) { cleanBase64 += "="; }
+
+    const payload = {
+      realtimeInput: {
+        mediaChunks: [{ mimeType: 'image/jpeg', data: cleanBase64 }],
+      },
+    };
+
+    console.log(`[TX] 📷 Streaming Image Chunk (Size: ${cleanBase64.length})`);
+    this.ws.send(JSON.stringify(payload));
   }
 
   sendAudio(base64Audio: string) {
-    if (!this.isConnected || !this.ws) return;
-    this.ws.send(JSON.stringify({
-      realtimeInput: { 
-        mediaChunks: [{ mimeType: 'audio/pcm', data: base64Audio }] 
+    if (!this.isConnected || !this.ws || !base64Audio) return;
+
+    let cleanBase64 = base64Audio.replace(/[^A-Za-z0-9+/=]/g, "");
+
+    // 🚨 THE "HALF-SAMPLE" SHIELD 
+    // Just in case the ESP32 sends an odd number of bytes, we slice it off 
+    // so Gemini's 16-bit audio engine doesn't freak out.
+    try {
+      let rawBytes = atob(cleanBase64);
+      if (rawBytes.length % 2 !== 0) {
+        rawBytes = rawBytes.slice(0, -1);
+        cleanBase64 = btoa(rawBytes);
       }
-    }));
+    } catch (e) { }
+
+    // Strict Base64 padding
+    while (cleanBase64.length % 4 !== 0) { cleanBase64 += "="; }
+
+    const payload = {
+      realtimeInput: {
+        mediaChunks: [{ mimeType: 'audio/pcm;rate=16000', data: cleanBase64 }],
+      },
+    };
+
+    console.log(`[TX] 🎤 Streaming Audio Chunk (Size: ${cleanBase64.length})`);
+    this.ws.send(JSON.stringify(payload));
   }
 
   sendEndTurn() {
+
+  }
+
+  sendToolResponse(functionResponses: any[]) {
     if (!this.isConnected || !this.ws) return;
-    // Sending turnComplete tells Gemini you are done streaming audio/data
-    this.ws.send(JSON.stringify({
-      clientContent: { turnComplete: true }
-    }));
+
+    const payload = {
+      toolResponse: {
+        functionResponses,
+      }
+    };
+    console.log(`[TX] 🛠️ Sending toolResponse for ${functionResponses.length} functions.`);
+    this.ws.send(JSON.stringify(payload));
+  }
+
+  sendText(text: string) {
+    if (!this.isConnected || !this.ws) return;
+
+    const payload = {
+      clientContent: {
+        turns: [{ role: 'user', parts: [{ text }] }],
+        turnComplete: true
+      }
+    };
+    console.log(`[TX] 📤 Sending Text: "${text}"`);
+    this.ws.send(JSON.stringify(payload));
   }
 
   on(event: string, callback: Function) {

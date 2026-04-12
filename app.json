@@ -55,6 +55,12 @@
           ],
           "bluetoothAlwaysPermission": "Allow Insight Glasses to connect to your wearable device."
         }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow Insight to use your location to give you local directions and recommendations."
+        }
       ]
     ],
     "experiments": {
