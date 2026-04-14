@@ -6,7 +6,7 @@ import dgram from 'react-native-udp';
 import { GeminiLiveService } from '../services/GeminiLiveService';
 
 // ⚠️ Ensure your API key is loaded
-const API_KEY = process.env.EXPO_PUBLIC_GEMINI_KEY || "AIzaSyCXrUAupjY1CFiVBUC36Ztquv2y8MQ78RE";
+const API_KEY = 
 
 // --- WAV BATCHING UTILITY ---
 const createWavFromChunks = (base64Chunks: string[], sampleRate: number = 24000): string => {
@@ -116,6 +116,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
 
   // --- GEMINI STATE ---
   const geminiServiceRef = useRef<GeminiLiveService | null>(null);
+  const pendingImagesRef = useRef<string[]>([]); // Images queued before Gemini connects
   const [isConnected, setIsConnected] = useState(false);
   const [status, setStatus] = useState('Disconnected');
   const [userTranscript, setUserTranscript] = useState('');
@@ -137,32 +138,49 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
 
   const createNewChat = async () => {
     const currentChat = chatHistoryRef.current;
-    if (currentChat.length === 0) return;
-    try {
-      const sessionId = Date.now().toString();
-      const preview = currentChat.find(c => c.text)?.text?.substring(0, 30) || "Conversation with Insight";
 
-      const newSession: SessionHistoryItem = { id: sessionId, timestamp: Date.now(), preview };
-      const updatedHistory = [newSession, ...sessionHistoryRef.current];
+    // Archive the current session if it has content
+    if (currentChat.length > 0) {
+      try {
+        const sessionId = Date.now().toString();
+        const preview = currentChat.find(c => c.text)?.text?.substring(0, 30) || "Conversation with Insight";
 
-      setSessionHistory(updatedHistory);
+        const newSession: SessionHistoryItem = { id: sessionId, timestamp: Date.now(), preview };
+        const updatedHistory = [newSession, ...sessionHistoryRef.current];
 
-      const hsPath = `${FileSystem.documentDirectory}session_history.json`;
-      await FileSystem.writeAsStringAsync(hsPath, JSON.stringify(updatedHistory));
+        setSessionHistory(updatedHistory);
 
-      const chatPath = `${FileSystem.documentDirectory}chat_${sessionId}.json`;
-      await FileSystem.writeAsStringAsync(chatPath, JSON.stringify(currentChat));
+        const hsPath = `${FileSystem.documentDirectory}session_history.json`;
+        await FileSystem.writeAsStringAsync(hsPath, JSON.stringify(updatedHistory));
 
-      // Clear current active feed
-      setChatHistory([]);
-      setUserTranscript('');
-      userTranscriptRef.current = '';
-      setResponseText('');
-      botResponseRef.current = '';
-      setImages([]);
-      setSearchSources([]);
-    } catch (e) {
-      console.error("Failed to save session", e);
+        const chatPath = `${FileSystem.documentDirectory}chat_${sessionId}.json`;
+        await FileSystem.writeAsStringAsync(chatPath, JSON.stringify(currentChat));
+      } catch (e) {
+        console.error("Failed to save session", e);
+      }
+    }
+
+    // Clear current active feed regardless
+    setChatHistory([]);
+    setUserTranscript('');
+    userTranscriptRef.current = '';
+    setResponseText('');
+    botResponseRef.current = '';
+    setImages([]);
+    setSearchSources([]);
+    pendingImagesRef.current = [];
+    audioQueue.current = [];
+    isPlaying.current = false;
+
+    // Restart the Gemini session so the AI gets a completely fresh context
+    const service = geminiServiceRef.current;
+    if (service) {
+      console.log('[SYS] 🔄 New Chat: Restarting Gemini session...');
+      service.disconnect();
+      // Reconnect after a brief pause to let the socket close cleanly
+      setTimeout(() => {
+        service.connect(lastLocationRef.current || undefined);
+      }, 500);
     }
   };
   const [searchSources, setSearchSources] = useState<{ title: string, uri: string }[]>([]);
@@ -216,14 +234,29 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     geminiServiceRef.current = service;
 
     // ✅ FIX 2: All service.on() calls at the same level — none nested inside others
-    service.on('onConnected', () => { 
-      setIsConnected(true); 
-      setStatus('Listening'); 
-      createNewChat(); // Auto-save and clear UI to align with new Gemini Context initialization
+    service.on('onConnected', () => {
+      setIsConnected(true);
+      setStatus('Listening');
+
+      // Flush any images that arrived during the handshake window
+      const queued = pendingImagesRef.current;
+      if (queued.length > 0) {
+        console.log(`[SYS] 📤 Flushing ${queued.length} queued image(s) to Gemini.`);
+        pendingImagesRef.current = [];
+        // Small delay to let setup complete before sending media
+        setTimeout(() => {
+          queued.forEach(b64 => service.sendImage(b64));
+        }, 300);
+      }
     });
-    service.on('onDisconnected', () => { 
-      setIsConnected(false); 
-      setStatus('Disconnected'); 
+    service.on('onDisconnected', () => {
+      setIsConnected(false);
+      setStatus('Disconnected');
+    });
+    service.on('onReconnecting', (attempt: number, max: number, delayMs: number) => {
+      setIsConnected(false);
+      setStatus(`Reconnecting... (${attempt}/${max})`);
+      console.log(`[SYS] 🔄 Auto-reconnect attempt ${attempt}/${max} in ${delayMs / 1000}s`);
     });
     service.on('onTranscript', (text: string) => {
       userTranscriptRef.current += text;
@@ -389,8 +422,24 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   // 4. Connect to Camera/Mic ESP & Route to Gemini
   useEffect(() => {
     if (!cameraIP) return;
+
+    // Close any existing stale socket before opening a new one
+    if (cameraSocketRef.current) {
+      console.log('[SYS] 🔌 Closing stale camera socket before reconnecting...');
+      cameraSocketRef.current.onmessage = null; // Detach handler so stale events don't fire
+      cameraSocketRef.current.close();
+    }
+
     const ws = new WebSocket(`ws://${cameraIP}:81`);
     cameraSocketRef.current = ws;
+
+    ws.onopen = () => {
+      console.log(`[SYS] ✅ Camera/Mic WebSocket connected to ${cameraIP}. Listening for CMD:WAKE...`);
+    };
+
+    ws.onclose = (e) => {
+      console.log(`[SYS] 🛑 Camera/Mic WebSocket closed: Code ${e.code}`);
+    };
 
     ws.onmessage = (event) => {
       if (typeof event.data !== 'string') return;
@@ -409,34 +458,48 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         geminiServiceRef.current?.disconnect();
       }
 
-     // Standard Data Forwarding (Only works if Gemini is connected!)
+      // Standard Data Forwarding
       else if (msg.startsWith("IMG:")) {
         let base64 = msg.replace("IMG:", "");
-        
-        // 🚨 FIX 1: The UI Shield. React Native's <Image> component will silently 
-        // fail if the string isn't perfectly padded. Clean and pad it here!
-        base64 = base64.replace(/[^A-Za-z0-9+/=]/g, "");
-        while (base64.length % 4 !== 0) { base64 += "="; }
 
-        if (geminiServiceRef.current?.isConnected) {
-          // Use a random string to guarantee unique keys for the FlatList
-          const uniqueId = 'img_' + Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9);
+        // Strip ONLY whitespace — preserve all valid base64 chars (+, /, =)
+        // The ESP32 already strips \n/\r on its side, but be safe.
+        base64 = base64.replace(/[\s\r\n]/g, "");
+        // Ensure correct padding
+        const rem = base64.length % 4;
+        if (rem !== 0) base64 = base64.padEnd(base64.length + (4 - rem), "=");
 
-          setChatHistory(prev => [...prev, {
-            id: uniqueId,
-            imageUri: `data:image/jpeg;base64,${base64}`,
-            sender: 'user',
-            timestamp: Date.now()
-          }]);
-          
-          setImages(prev => [...prev, `data:image/jpeg;base64,${base64}`]);
-          geminiServiceRef.current.sendImage(base64); 
+        if (base64.length === 0) return;
+
+        // ✅ ALWAYS show the image in the chat UI, regardless of Gemini state
+        const uniqueId = 'img_' + Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9);
+        setChatHistory(prev => [...prev, {
+          id: uniqueId,
+          imageUri: `data:image/jpeg;base64,${base64}`,
+          sender: 'user',
+          timestamp: Date.now()
+        }]);
+        setImages(prev => [...prev, `data:image/jpeg;base64,${base64}`]);
+
+        // ✅ Send to Gemini if connected, otherwise queue it
+        const service = geminiServiceRef.current;
+        if (service?.isConnected) {
+          service.sendImage(base64);
+        } else if (service) {
+          // Queue for when Gemini connects (e.g. during handshake window after CMD:WAKE)
+          pendingImagesRef.current.push(base64);
+          console.log(`[SYS] 🕐 Image queued (Gemini not yet ready). Queue size: ${pendingImagesRef.current.length}`);
         }
       }
       else if (msg.startsWith("AUD:")) {
         const base64 = msg.replace("AUD:", "");
         geminiServiceRef.current?.sendAudio(base64);
       }
+    };
+
+    return () => {
+      ws.onmessage = null;
+      ws.close();
     };
   }, [cameraIP]);
 
@@ -453,7 +516,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const sendText = (text: string) => {
     setSearchSources([]); // CLEAR PREVIOUS SEARCH RESULTS
     setChatHistory(prev => [...prev, { id: Date.now().toString(), text, sender: 'user', timestamp: Date.now() }]);
-    
+
     const service = geminiServiceRef.current;
     if (!service) return;
 

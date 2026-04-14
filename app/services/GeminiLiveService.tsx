@@ -8,6 +8,13 @@ export class GeminiLiveService {
   private ws: WebSocket | null = null;
   public isConnected: boolean = false;
 
+  // Reconnection state
+  private reconnectAttempts: number = 0;
+  private maxReconnectAttempts: number = 5;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastLatLng?: { latitude: number; longitude: number };
+  private intentionalDisconnect: boolean = false;
+
   private listeners: any = {
     onTextResponse: null,
     onAudioResponse: null,
@@ -17,6 +24,7 @@ export class GeminiLiveService {
     onDisconnected: null,
     onSearchSources: null,
     onToolCall: null,
+    onReconnecting: null,
   };
 
   constructor(apiKey: string) {
@@ -26,16 +34,20 @@ export class GeminiLiveService {
   connect(latLng?: { latitude: number; longitude: number }) {
     if (this.isConnected || this.ws) return;
 
+    this.intentionalDisconnect = false;
+    this.lastLatLng = latLng;
+
     const model = 'models/gemini-2.5-flash-native-audio-preview-12-2025';
     const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
 
-    console.log(`[SYS] ⏳ Connecting Raw WS to ${model}...`);
+    console.log(`[SYS] ⏳ Connecting Raw WS to ${model}... (Attempt ${this.reconnectAttempts + 1})`);
     this.ws = new WebSocket(url);
     this.ws.binaryType = 'arraybuffer';
 
     this.ws.onopen = () => {
       console.log('[SYS] ✅ Gemini Socket Open ⚡');
       this.isConnected = true;
+      this.reconnectAttempts = 0; // Reset on successful connection
       this.sendSetupMessage(model, latLng);
       if (this.listeners.onConnected) this.listeners.onConnected();
     };
@@ -63,14 +75,61 @@ export class GeminiLiveService {
     };
 
     this.ws.onclose = (e) => {
-      console.log(`[SYS] 🛑 Gemini Disconnected: Code ${e.code}, Reason: ${e.reason}`);
+      console.log(`[SYS] 🛑 Gemini Disconnected: Code ${e.code}, Reason: ${e.reason || 'No reason'}`);
       this.isConnected = false;
       this.ws = null;
-      if (this.listeners.onDisconnected) this.listeners.onDisconnected();
+
+      // Normal closure (1000) or intentional = don't reconnect
+      if (this.intentionalDisconnect || e.code === 1000) {
+        this.reconnectAttempts = 0;
+        if (this.listeners.onDisconnected) this.listeners.onDisconnected();
+        return;
+      }
+
+      // Code 1007 = Invalid data (bad Base64). Code 1006 = Abnormal closure. Attempt reconnect.
+      if (this.reconnectAttempts < this.maxReconnectAttempts) {
+        this.reconnectAttempts++;
+        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 15000); // Exp backoff: 1s, 2s, 4s, 8s, 15s
+        console.log(`[SYS] 🔄 Reconnecting in ${delay / 1000}s... (Attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+
+        if (this.listeners.onReconnecting) {
+          this.listeners.onReconnecting(this.reconnectAttempts, this.maxReconnectAttempts, delay);
+        }
+
+        this.reconnectTimer = setTimeout(() => {
+          this.connect(this.lastLatLng);
+        }, delay);
+      } else {
+        console.error(`[SYS] ❌ Max reconnect attempts (${this.maxReconnectAttempts}) reached. Giving up.`);
+        this.reconnectAttempts = 0;
+        if (this.listeners.onDisconnected) this.listeners.onDisconnected();
+      }
     };
   }
 
   private sendSetupMessage(model: string, latLng?: { latitude: number; longitude: number }) {
+    // 1. Define the Persona & THE IRONCLAD SCRIPT BAN
+    const baseSystemPrompt = `You are Insight, an advanced AI assistant powering a pair of smart glasses. 
+Your responses are delivered via an audio speaker and a small OLED display, so keep your answers concise, natural, and highly conversational. 
+
+CRITICAL TRANSCRIPTION & LANGUAGE LOCK: The user will strictly and exclusively speak in either English or Urdu. The acoustic input you receive will never be any other language. 
+
+1. INPUT TRANSCRIPTION RULE: When generating the user's input transcript, you MUST format the text EXCLUSIVELY using the English alphabet (Latin script) or the Urdu alphabet (Arabic/Nastaliq script). 
+* If the user speaks Urdu/Hindustani, you MUST transcribe it using the Urdu script. 
+* NEVER transcribe it in Hindi (Devanagari script). 
+* NEVER transcribe in Malayalam, Arabic, or any other language's alphabet. 
+
+2. OUTPUT RULE: You must only speak and respond in English or Urdu. If you hear background noise, ignore it entirely. Do not attempt to translate or transcribe background noise.`;
+
+    // 2. Dynamically Append Location Context
+    let finalSystemPrompt = baseSystemPrompt;
+
+    if (latLng) {
+      finalSystemPrompt += `\n\nLOCATION CONTEXT: The user's EXACT current GPS location is latitude ${latLng.latitude}, longitude ${latLng.longitude} (Karachi, Pakistan). When performing any location-based search (e.g., restaurants, places, directions), you MUST use these coordinates to find results near this location. Do NOT use US or any other region's data. Always return local Pakistani results.`;
+    } else {
+      finalSystemPrompt += `\n\nLOCATION CONTEXT: The user is located in Karachi, Pakistan. When performing any location-based search, you MUST first call the fetchCurrentLocation function. CRITICAL INSTRUCTION: Once you receive the coordinates, explicitly append the city, country, or coordinates to your Google Search query (e.g., "[Query] near [Latitude], [Longitude] Karachi Pakistan") to ensure local results.`;
+    }
+
     const payload: any = {
       setup: {
         model,
@@ -82,11 +141,15 @@ export class GeminiLiveService {
             },
           },
         },
+        systemInstruction: {
+          parts: [{ text: finalSystemPrompt }]
+        },
+        // Requesting transcripts from the server
         outputAudioTranscription: {},
         inputAudioTranscription: {},
         tools: [
           { googleSearch: {} },
-          { googleMaps: {} },
+          // { googleMaps: {} }, // Kept commented out to prevent websocket crashes
           {
             functionDeclarations: [
               {
@@ -104,9 +167,6 @@ export class GeminiLiveService {
     };
 
     if (latLng) {
-      payload.setup.systemInstruction = {
-        parts: [{ text: `The user's current location is latitude: ${latLng.latitude}, longitude: ${latLng.longitude}. Use this context for accurate local searches.` }]
-      };
       payload.setup.toolConfig = {
         retrievalConfig: {
           latLng: {
@@ -184,7 +244,7 @@ export class GeminiLiveService {
         }
       }
 
-      // 4. End of Turn (Triggers UI update to move text to history)
+      // 4. End of Turn
       if (content.turnComplete || content.interrupted) {
         console.log(content.interrupted ? '[RX] 🛑 AI Interrupted.' : '[RX] 🏁 AI Turn Complete.');
         if (this.listeners.onTextResponse) this.listeners.onTextResponse("", false, true);
@@ -195,51 +255,67 @@ export class GeminiLiveService {
   sendImage(base64Image: string) {
     if (!this.isConnected || !this.ws || !base64Image) return;
 
-    // Strict Base64 padding shield
-    let cleanBase64 = base64Image.replace(/[^A-Za-z0-9+/=]/g, "");
-    while (cleanBase64.length % 4 !== 0) { cleanBase64 += "="; }
+    try {
+      const cleanBase64 = base64Image.replace(/[\s\r\n]/g, "");
 
-    const payload = {
-      realtimeInput: {
-        mediaChunks: [{ mimeType: 'image/jpeg', data: cleanBase64 }],
-      },
-    };
+      if (cleanBase64.length === 0) {
+        console.warn('[TX] ⚠️ Skipping empty image chunk');
+        return;
+      }
 
-    console.log(`[TX] 📷 Streaming Image Chunk (Size: ${cleanBase64.length})`);
-    this.ws.send(JSON.stringify(payload));
+      if (cleanBase64.length % 4 !== 0) {
+        console.warn(`[TX] ⚠️ Image base64 length not divisible by 4 (${cleanBase64.length}), padding...`);
+      }
+      const paddedBase64 = cleanBase64.padEnd(cleanBase64.length + (4 - cleanBase64.length % 4) % 4, '=');
+
+      const payload = {
+        realtimeInput: {
+          mediaChunks: [{ mimeType: 'image/jpeg', data: paddedBase64 }],
+        },
+      };
+
+      console.log(`[TX] 📷 Streaming Image Chunk (Size: ${paddedBase64.length})`);
+      this.ws.send(JSON.stringify(payload));
+    } catch (e) {
+      console.error('[TX] ❌ Failed to send image chunk:', e);
+    }
   }
 
   sendAudio(base64Audio: string) {
     if (!this.isConnected || !this.ws || !base64Audio) return;
 
-    let cleanBase64 = base64Audio.replace(/[^A-Za-z0-9+/=]/g, "");
-
-    // 🚨 THE "HALF-SAMPLE" SHIELD 
-    // Just in case the ESP32 sends an odd number of bytes, we slice it off 
-    // so Gemini's 16-bit audio engine doesn't freak out.
     try {
-      let rawBytes = atob(cleanBase64);
-      if (rawBytes.length % 2 !== 0) {
-        rawBytes = rawBytes.slice(0, -1);
-        cleanBase64 = btoa(rawBytes);
+      let cleanBase64 = base64Audio.replace(/[\s\r\n]/g, "");
+
+      if (cleanBase64.length === 0) return;
+
+      try {
+        let rawBytes = atob(cleanBase64);
+        if (rawBytes.length % 2 !== 0) {
+          rawBytes = rawBytes.slice(0, -1);
+          cleanBase64 = btoa(rawBytes);
+        }
+      } catch (e) {
+        console.warn('[TX] ⚠️ Audio atob failed, skipping chunk:', e);
+        return;
       }
-    } catch (e) { }
 
-    // Strict Base64 padding
-    while (cleanBase64.length % 4 !== 0) { cleanBase64 += "="; }
+      cleanBase64 = cleanBase64.padEnd(cleanBase64.length + (4 - cleanBase64.length % 4) % 4, '=');
 
-    const payload = {
-      realtimeInput: {
-        mediaChunks: [{ mimeType: 'audio/pcm;rate=16000', data: cleanBase64 }],
-      },
-    };
+      const payload = {
+        realtimeInput: {
+          mediaChunks: [{ mimeType: 'audio/pcm;rate=16000', data: cleanBase64 }],
+        },
+      };
 
-    console.log(`[TX] 🎤 Streaming Audio Chunk (Size: ${cleanBase64.length})`);
-    this.ws.send(JSON.stringify(payload));
+      // console.log(`[TX] 🎤 Streaming Audio Chunk (Size: ${cleanBase64.length})`);~
+      this.ws.send(JSON.stringify(payload));
+    } catch (e) {
+      console.error('[TX] ❌ Failed to send audio chunk:', e);
+    }
   }
 
   sendEndTurn() {
-
   }
 
   sendToolResponse(functionResponses: any[]) {
@@ -272,7 +348,14 @@ export class GeminiLiveService {
   }
 
   disconnect() {
-    this.ws?.close();
+    this.intentionalDisconnect = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectAttempts = 0;
+    this.ws?.close(1000, 'User disconnected');
     this.ws = null;
+    this.isConnected = false;
   }
 }
