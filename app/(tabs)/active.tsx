@@ -7,6 +7,7 @@ import {
   Image,
   Keyboard,
   KeyboardAvoidingView,
+  ActivityIndicator,
   Linking,
   Modal,
   Platform,
@@ -25,7 +26,7 @@ export default function ActiveScreen() {
   const {
     isConnected, status, userTranscript, responseText,
     sendText, simulateBurst, chatHistory, setChatHistory, searchSources,
-    sessionHistory, createNewChat, loadChat, deleteChat
+    sessionHistory, createNewChat, loadChat, deleteChat, processingToolMessage
   } = useApp();
 
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
@@ -152,6 +153,16 @@ export default function ActiveScreen() {
                     <Text className="text-white text-base italic">"{userTranscript}"</Text>
                   </View>
                 ) : null}
+
+                {/* Tool Processing Status */}
+                {processingToolMessage && (
+                  <View className="mb-4 max-w-[95%] px-5 py-4 bg-primary/20 self-start rounded-2xl rounded-tl-sm border border-primary/30">
+                    <View className="flex-row items-center gap-2">
+                       <ActivityIndicator size="small" color="#06b6d4" />
+                       <Text className="text-primary text-sm font-bold ml-2">{processingToolMessage}</Text>
+                    </View>
+                  </View>
+                )}
 
                 {/* Active AI Streaming Response */}
                 {responseText ? (

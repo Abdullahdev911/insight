@@ -44,6 +44,7 @@ unsigned long lastSoundTime = 0;
 
 // Task Synchronization Flags
 volatile bool triggerImage = false;
+volatile bool forceSleep = false;
 SemaphoreHandle_t wsMutex;
 
 // =======================================================
@@ -253,7 +254,7 @@ void soundTask(void *param) {
 
   const uint32_t WAKE_THRESHOLD = 500;
   const uint32_t ACTIVE_THRESHOLD = 200;
-  const unsigned long SLEEP_TIMEOUT = 10000;
+  const unsigned long SLEEP_TIMEOUT = 60000; // 60 seconds to prevent early drops mid-conversation
 
   while (!wsConnected) { delay(100); }
 
@@ -322,14 +323,19 @@ void soundTask(void *param) {
         lastActivityTime = millis();
       }
 
-      // Terminate conversation after silence
-      if (millis() - lastActivityTime > SLEEP_TIMEOUT) {
-        Serial.println("\n💤 [STATE] Conversation Ended. Going to Sleep.");
-        isAwake = false;
-        if (xSemaphoreTake(wsMutex, portMAX_DELAY) == pdTRUE) {
-          webSocket.sendTXT(connectedClient, "CMD:SLEEP");
-          xSemaphoreGive(wsMutex);
+      // Terminate conversation after silence or forced sleep
+      if (forceSleep || (millis() - lastActivityTime > SLEEP_TIMEOUT)) {
+        if (forceSleep) {
+          Serial.println("\n💤 [STATE] Forced Sleep Requested. Going to Sleep.");
+          forceSleep = false;
+        } else {
+          Serial.println("\n💤 [STATE] Conversation Ended (Silence). Going to Sleep.");
+          if (xSemaphoreTake(wsMutex, portMAX_DELAY) == pdTRUE) {
+            webSocket.sendTXT(connectedClient, "CMD:SLEEP");
+            xSemaphoreGive(wsMutex);
+          }
         }
+        isAwake = false;
       }
     }
   }
@@ -352,6 +358,20 @@ void webSocketEvent(uint8_t client, WStype_t type,
       connectedClient = 255;
       wsConnected = false;
       break;
+
+    case WStype_TEXT: {
+      String msg = String((char*)payload);
+      // Null-terminate explicitly just to be safe if payload isn't
+      // msg = msg.substring(0, length);
+      if (msg.startsWith("CMD:CAPTURE")) {
+        Serial.println("📸 App Requested Image Capture!");
+        triggerImage = true;
+      } else if (msg.startsWith("CMD:SLEEP")) {
+        Serial.println("💤 App Requested Module Sleep!");
+        forceSleep = true;
+      }
+      break;
+    }
   }
 }
 

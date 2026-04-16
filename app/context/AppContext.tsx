@@ -6,7 +6,7 @@ import dgram from 'react-native-udp';
 import { GeminiLiveService } from '../services/GeminiLiveService';
 
 // ⚠️ Ensure your API key is loaded
-const API_KEY = 
+const API_KEY = ""
 
 // --- WAV BATCHING UTILITY ---
 const createWavFromChunks = (base64Chunks: string[], sampleRate: number = 24000): string => {
@@ -101,6 +101,7 @@ interface AppContextType {
   searchSources: { title: string, uri: string }[];
   isLocationEnabled: boolean;
   setIsLocationEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+  processingToolMessage: string | null;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -127,6 +128,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const chatHistoryRef = useRef<ChatItem[]>([]);
   const [sessionHistory, setSessionHistory] = useState<SessionHistoryItem[]>([]);
   const sessionHistoryRef = useRef<SessionHistoryItem[]>([]);
+  const [processingToolMessage, setProcessingToolMessage] = useState<string | null>(null);
 
   useEffect(() => {
     chatHistoryRef.current = chatHistory;
@@ -268,6 +270,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     });
 
     service.on('onTextResponse', (text: string, isThinking: boolean, isDone: boolean) => {
+      setProcessingToolMessage(null);
       if (isDone) {
         setStatus('Done');
 
@@ -305,6 +308,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     });
 
     service.on('onAudioResponse', (base64Audio: string) => {
+      setProcessingToolMessage(null);
       audioQueue.current.push(base64Audio);
       if (!isPlaying.current) processAudioQueue();
     });
@@ -315,6 +319,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       const responses: any[] = [];
       for (const call of toolCall.functionCalls) {
         if (call.name === 'fetchCurrentLocation') {
+          setProcessingToolMessage("🌍 Insight is verifying your location...");
           if (!locationEnabledRef.current) {
             responses.push({
               id: call.id,
@@ -338,6 +343,27 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
           } catch (e) {
             responses.push({ id: call.id, name: call.name, response: { result: { error: "Failed to get GPS location." } } });
           }
+        } else if (call.name === 'captureCameraFrame') {
+          setProcessingToolMessage("📸 Insight is looking...");
+          console.log("[SYS] 📸 AI Requested Camera Frame!");
+          if (cameraSocketRef.current?.readyState === WebSocket.OPEN) {
+            cameraSocketRef.current.send("CMD:CAPTURE");
+          }
+          if (displaySocketRef.current?.readyState === WebSocket.OPEN) {
+            displaySocketRef.current.send("[ System: Capturing Image... ]");
+          }
+          responses.push({ id: call.id, name: call.name, response: { result: { success: true } } });
+        } else if (call.name === 'endConversation') {
+          console.log("[SYS] 🛑 AI Requested Session End!");
+          if (cameraSocketRef.current?.readyState === WebSocket.OPEN) {
+            cameraSocketRef.current.send("CMD:SLEEP");
+          }
+          if (displaySocketRef.current?.readyState === WebSocket.OPEN) {
+            displaySocketRef.current.send("Goodbye!");
+          }
+          service.disconnect();
+          responses.push({ id: call.id, name: call.name, response: { result: { success: true } } });
+          setChatHistory(prev => [...prev, { id: 'end_conv_' + Date.now(), text: "Goodbye! 💤 (Conversation Ended)", sender: 'bot', timestamp: Date.now() }]);
         }
       }
       if (responses.length > 0) {
@@ -588,7 +614,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       startScan, startScanMock, isScanning, cameraIP, displayIP, isFullyConnected: !!(cameraIP && displayIP),
       images, isConnected, status, userTranscript, responseText, sendText, simulateBurst, chatHistory, setChatHistory,
       sessionHistory, createNewChat, loadChat, deleteChat,
-      searchSources, isLocationEnabled, setIsLocationEnabled
+      searchSources, isLocationEnabled, setIsLocationEnabled, processingToolMessage
     }}>
       {children}
     </AppContext.Provider>

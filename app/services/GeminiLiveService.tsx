@@ -159,6 +159,22 @@ CRITICAL TRANSCRIPTION & LANGUAGE LOCK: The user will strictly and exclusively s
                   type: "OBJECT",
                   properties: {}
                 }
+              },
+              {
+                name: "captureCameraFrame",
+                description: "Instructs the hardware to snap a picture. Call this immediately when asked to look at something, read text, or identify a prior/new object mid-conversation.",
+                parameters: {
+                  type: "OBJECT",
+                  properties: {}
+                }
+              },
+              {
+                name: "endConversation",
+                description: "Instructs the system to gracefully terminate the interaction. Call this when the user says goodbye or dismisses the AI.",
+                parameters: {
+                  type: "OBJECT",
+                  properties: {}
+                }
               }
             ]
           }
