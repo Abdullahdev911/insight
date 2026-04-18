@@ -31,7 +31,7 @@ export class GeminiLiveService {
     this.apiKey = apiKey;
   }
 
-  connect(latLng?: { latitude: number; longitude: number }) {
+  connect(latLng?: { latitude: number; longitude: number }, voiceName: string = 'Zephyr') {
     if (this.isConnected || this.ws) return;
 
     this.intentionalDisconnect = false;
@@ -48,7 +48,7 @@ export class GeminiLiveService {
       console.log('[SYS] ✅ Gemini Socket Open ⚡');
       this.isConnected = true;
       this.reconnectAttempts = 0; // Reset on successful connection
-      this.sendSetupMessage(model, latLng);
+      this.sendSetupMessage(model, latLng, voiceName);
       if (this.listeners.onConnected) this.listeners.onConnected();
     };
 
@@ -97,7 +97,7 @@ export class GeminiLiveService {
         }
 
         this.reconnectTimer = setTimeout(() => {
-          this.connect(this.lastLatLng);
+          this.connect(this.lastLatLng, this.lastVoiceName);
         }, delay);
       } else {
         console.error(`[SYS] ❌ Max reconnect attempts (${this.maxReconnectAttempts}) reached. Giving up.`);
@@ -107,7 +107,7 @@ export class GeminiLiveService {
     };
   }
 
-  private sendSetupMessage(model: string, latLng?: { latitude: number; longitude: number }) {
+  private sendSetupMessage(model: string, latLng?: { latitude: number; longitude: number }, voiceName: string = 'Zephyr') {
     // 1. Define the Persona & THE IRONCLAD SCRIPT BAN
     const baseSystemPrompt = `You are Insight, an advanced AI assistant powering a pair of smart glasses. 
 Your responses are delivered via an audio speaker and a small OLED display, so keep your answers concise, natural, and highly conversational. 
@@ -123,7 +123,7 @@ CRITICAL TRANSCRIPTION & LANGUAGE LOCK: The user will strictly and exclusively s
 
     // 2. Dynamically Append Location Context
     let finalSystemPrompt = baseSystemPrompt;
-
+    
     if (latLng) {
       finalSystemPrompt += `\n\nLOCATION CONTEXT: The user's EXACT current GPS location is latitude ${latLng.latitude}, longitude ${latLng.longitude} (Karachi, Pakistan). When performing any location-based search (e.g., restaurants, places, directions), you MUST use these coordinates to find results near this location. Do NOT use US or any other region's data. Always return local Pakistani results.`;
     } else {
@@ -137,14 +137,14 @@ CRITICAL TRANSCRIPTION & LANGUAGE LOCK: The user will strictly and exclusively s
           responseModalities: ['AUDIO'],
           speechConfig: {
             voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: 'Zephyr' },
+              prebuiltVoiceConfig: { voiceName: voiceName },
             },
+            languageCode: 'en-US',
           },
         },
         systemInstruction: {
           parts: [{ text: finalSystemPrompt }]
         },
-        // Requesting transcripts from the server
         outputAudioTranscription: {},
         inputAudioTranscription: {},
         tools: [
@@ -179,6 +179,7 @@ CRITICAL TRANSCRIPTION & LANGUAGE LOCK: The user will strictly and exclusively s
             ]
           }
         ],
+
       },
     };
 

@@ -1,11 +1,20 @@
-import { ChevronRight } from 'lucide-react-native';
-import { ScrollView, Switch, Text, View } from 'react-native';
+import { ChevronRight, Check } from 'lucide-react-native';
+import { ScrollView, Switch, Text, View, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useApp } from './../context/AppContext';
 
 export default function SettingsScreen() {
-  const { isLocationEnabled, setIsLocationEnabled } = useApp();
-  
+  const { isLocationEnabled, setIsLocationEnabled, geminiVoice, setGeminiVoice } = useApp();
+
+  const VOICES = [
+    { id: 'Puck', label: 'Puck (Default)' },
+    { id: 'Charon', label: 'Charon' },
+    { id: 'Kore', label: 'Kore' },
+    { id: 'Fenrir', label: 'Fenrir' },
+    { id: 'Aoede', label: 'Aoede' },
+    { id: 'Zephyr', label: 'Zephyr' }
+  ];
+
   return (
     <SafeAreaView className="flex-1 bg-background px-5 pt-5">
       <Text className="text-text font-bold text-2xl mb-6">Settings</Text>
@@ -27,6 +36,24 @@ export default function SettingsScreen() {
                         <ChevronRight size={16} color="#64748b" />
                     </View>
                 </View>
+            </View>
+        </View>
+
+        {/* Section - AI Voice */}
+        <View className="mb-8">
+            <Text className="text-primary text-xs font-bold uppercase tracking-widest mb-4">AI Voice</Text>
+            
+            <View className="bg-surfaceHighlight rounded-2xl overflow-hidden border border-white/5">
+                {VOICES.map((voice, idx) => (
+                    <TouchableOpacity 
+                        key={voice.id} 
+                        onPress={() => setGeminiVoice(voice.id)}
+                        className={`p-4 flex-row justify-between items-center ${idx !== VOICES.length - 1 ? 'border-b border-white/5' : ''}`}
+                    >
+                        <Text className="text-text font-medium">{voice.label}</Text>
+                        {geminiVoice === voice.id && <Check size={18} color="#06b6d4" />}
+                    </TouchableOpacity>
+                ))}
             </View>
         </View>
 

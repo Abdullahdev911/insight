@@ -298,7 +298,7 @@ void soundTask(void *param) {
       
       // 🚨 FIX: Only SET A FLAG to trigger the image capture. 
       // Do NOT run the slow camera capture on the Sound CPU Core!
-      if (imagesSent < 3 && (millis() - wakeTime > 1500) && (millis() - lastImageTime > 1000)) {
+      if (imagesSent < 2 && (millis() - wakeTime > 1500) && (millis() - lastImageTime > 1000)) {
         triggerImage = true; 
         imagesSent++;
         lastImageTime = millis();

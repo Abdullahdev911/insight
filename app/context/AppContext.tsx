@@ -6,7 +6,7 @@ import dgram from 'react-native-udp';
 import { GeminiLiveService } from '../services/GeminiLiveService';
 
 // ⚠️ Ensure your API key is loaded
-const API_KEY = ""
+const API_KEY = "AIzaSyALu-KEbUiA_73Ov7JRkX8dJGOSkWR--Qs"
 
 // --- WAV BATCHING UTILITY ---
 const createWavFromChunks = (base64Chunks: string[], sampleRate: number = 24000): string => {
@@ -71,6 +71,7 @@ export interface SessionHistoryItem {
   id: string;
   timestamp: number;
   preview: string;
+  images?: string[];
 }
 
 interface AppContextType {
@@ -101,6 +102,8 @@ interface AppContextType {
   searchSources: { title: string, uri: string }[];
   isLocationEnabled: boolean;
   setIsLocationEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+  geminiVoice: string;
+  setGeminiVoice: (voice: string) => void;
   processingToolMessage: string | null;
 }
 
@@ -130,6 +133,57 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const sessionHistoryRef = useRef<SessionHistoryItem[]>([]);
   const [processingToolMessage, setProcessingToolMessage] = useState<string | null>(null);
 
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const currentSessionIdRef = useRef<string | null>(null);
+
+  const [geminiVoice, setGeminiVoiceState] = useState('Zephyr');
+  const geminiVoiceRef = useRef('Zephyr');
+
+  const setGeminiVoice = (voice: string) => {
+    if (voice === geminiVoiceRef.current) return;
+
+    setGeminiVoiceState(voice);
+    geminiVoiceRef.current = voice;
+
+    const service = geminiServiceRef.current;
+    if (service && service.isConnected) {
+      console.log(`[SYS] 🔄 Voice changed to ${voice}, restarting Gemini session...`);
+
+      // Save any ongoing message if bot was interrupted
+      if (status === 'Speaking...' || status === 'Thinking...') {
+         const finalTranscript = userTranscriptRef.current;
+         const finalBotResponse = botResponseRef.current;
+
+         setChatHistory(prev => {
+           let newHistory = [...prev];
+           if (finalTranscript.trim()) {
+             newHistory.push({ id: Date.now().toString() + '_user_int', text: finalTranscript + " [Interrupted]", sender: 'user', timestamp: Date.now() });
+           }
+           if (finalBotResponse.trim()) {
+             newHistory.push({ id: Date.now().toString() + '_bot_int', text: finalBotResponse + " [Interrupted - Voice Changed]", sender: 'bot', timestamp: Date.now() });
+           }
+           return newHistory;
+         });
+
+         setResponseText('');
+         botResponseRef.current = '';
+         setUserTranscript('');
+         userTranscriptRef.current = '';
+      }
+      
+      // Clear remaining pending audio from the queue to ensure old voice doesn't keep bleeding over
+      audioQueue.current = [];
+
+      service.disconnect();
+      setTimeout(() => {
+         // Ensure they didn't rapidly change voice again within the timeout
+         if (geminiVoiceRef.current === voice) {
+           service.connect(lastLocationRef.current || undefined, voice);
+         }
+      }, 500); // give it time to close cleanly
+    }
+  };
+
   useEffect(() => {
     chatHistoryRef.current = chatHistory;
   }, [chatHistory]);
@@ -138,17 +192,31 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     sessionHistoryRef.current = sessionHistory;
   }, [sessionHistory]);
 
-  const createNewChat = async () => {
-    const currentChat = chatHistoryRef.current;
+  const createNewChat = async (shouldReconnect: boolean = true, finalHistory?: ChatItem[]) => {
+    const currentChat = finalHistory || chatHistoryRef.current;
 
     // Archive the current session if it has content
     if (currentChat.length > 0) {
       try {
-        const sessionId = Date.now().toString();
+        const existingSessionId = currentSessionIdRef.current;
+        const sessionId = existingSessionId || Date.now().toString();
         const preview = currentChat.find(c => c.text)?.text?.substring(0, 30) || "Conversation with Insight";
+        const sessionImages = currentChat.filter(c => c.imageUri).map(c => c.imageUri as string);
 
-        const newSession: SessionHistoryItem = { id: sessionId, timestamp: Date.now(), preview };
-        const updatedHistory = [newSession, ...sessionHistoryRef.current];
+        let updatedHistory = [...sessionHistoryRef.current];
+
+        if (existingSessionId) {
+          // Update the existing session entry instead of duplicating it
+          updatedHistory = updatedHistory.map(session => 
+            session.id === existingSessionId 
+              ? { ...session, preview, images: sessionImages, timestamp: Date.now() } 
+              : session
+          );
+        } else {
+          // Create new session entry
+          const newSession: SessionHistoryItem = { id: sessionId, timestamp: Date.now(), preview, images: sessionImages };
+          updatedHistory = [newSession, ...updatedHistory];
+        }
 
         setSessionHistory(updatedHistory);
 
@@ -164,6 +232,8 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
 
     // Clear current active feed regardless
     setChatHistory([]);
+    setCurrentSessionId(null);
+    currentSessionIdRef.current = null;
     setUserTranscript('');
     userTranscriptRef.current = '';
     setResponseText('');
@@ -177,12 +247,15 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     // Restart the Gemini session so the AI gets a completely fresh context
     const service = geminiServiceRef.current;
     if (service) {
-      console.log('[SYS] 🔄 New Chat: Restarting Gemini session...');
+      console.log(`[SYS] 🔄 New Chat: ${shouldReconnect ? 'Restarting' : 'Disconnecting'} Gemini session...`);
       service.disconnect();
-      // Reconnect after a brief pause to let the socket close cleanly
-      setTimeout(() => {
-        service.connect(lastLocationRef.current || undefined);
-      }, 500);
+      
+      if (shouldReconnect) {
+        // Reconnect after a brief pause to let the socket close cleanly
+        setTimeout(() => {
+          service.connect(lastLocationRef.current || undefined, geminiVoiceRef.current);
+        }, 500);
+      }
     }
   };
   const [searchSources, setSearchSources] = useState<{ title: string, uri: string }[]>([]);
@@ -297,6 +370,11 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         // Force flush any remaining audio chunks at the end of the turn
         processAudioQueue(true);
       } else {
+        // DETECT START OF NEW RESPONSE: If botResponseRef was empty, tell OLED to clear old text
+        if (botResponseRef.current === "" && displaySocketRef.current?.readyState === WebSocket.OPEN) {
+          displaySocketRef.current.send("CMD:CLEAR");
+        }
+
         botResponseRef.current += text;
         setResponseText(botResponseRef.current);
         setStatus(isThinking ? 'Thinking...' : 'Speaking...');
@@ -319,7 +397,11 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       const responses: any[] = [];
       for (const call of toolCall.functionCalls) {
         if (call.name === 'fetchCurrentLocation') {
-          setProcessingToolMessage("🌍 Insight is verifying your location...");
+          const msg = "🌍 Insight is verifying your location...";
+          setProcessingToolMessage(msg);
+          if (displaySocketRef.current?.readyState === WebSocket.OPEN) {
+            displaySocketRef.current.send(`[ System: ${msg} ]`);
+          }
           if (!locationEnabledRef.current) {
             responses.push({
               id: call.id,
@@ -344,13 +426,14 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
             responses.push({ id: call.id, name: call.name, response: { result: { error: "Failed to get GPS location." } } });
           }
         } else if (call.name === 'captureCameraFrame') {
-          setProcessingToolMessage("📸 Insight is looking...");
+          const msg = "📸 Insight is looking...";
+          setProcessingToolMessage(msg);
+          if (displaySocketRef.current?.readyState === WebSocket.OPEN) {
+            displaySocketRef.current.send(`[ System: ${msg} ]`);
+          }
           console.log("[SYS] 📸 AI Requested Camera Frame!");
           if (cameraSocketRef.current?.readyState === WebSocket.OPEN) {
             cameraSocketRef.current.send("CMD:CAPTURE");
-          }
-          if (displaySocketRef.current?.readyState === WebSocket.OPEN) {
-            displaySocketRef.current.send("[ System: Capturing Image... ]");
           }
           responses.push({ id: call.id, name: call.name, response: { result: { success: true } } });
         } else if (call.name === 'endConversation') {
@@ -361,9 +444,20 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
           if (displaySocketRef.current?.readyState === WebSocket.OPEN) {
             displaySocketRef.current.send("Goodbye!");
           }
-          service.disconnect();
+          
           responses.push({ id: call.id, name: call.name, response: { result: { success: true } } });
-          setChatHistory(prev => [...prev, { id: 'end_conv_' + Date.now(), text: "Goodbye! 💤 (Conversation Ended)", sender: 'bot', timestamp: Date.now() }]);
+          
+          // Archive the current chat including a goodbye message, then clear the UI and disconnect
+          const goodbyeMsg: ChatItem = { 
+            id: 'end_conv_' + Date.now(), 
+            text: "Goodbye! 💤 (Conversation Ended)", 
+            sender: 'bot', 
+            timestamp: Date.now() 
+          };
+          
+          // Use createNewChat with shouldReconnect=false to archive and clear everything
+          // We pass the final history slice to ensure "Goodbye" is saved
+          await createNewChat(false, [...chatHistoryRef.current, goodbyeMsg]);
         }
       }
       if (responses.length > 0) {
@@ -477,7 +571,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         if (displaySocketRef.current?.readyState === WebSocket.OPEN) {
           displaySocketRef.current.send("CMD:CLEAR");
         }
-        geminiServiceRef.current?.connect(lastLocationRef.current || undefined);
+        geminiServiceRef.current?.connect(lastLocationRef.current || undefined, geminiVoiceRef.current);
       }
       else if (msg === "CMD:SLEEP") {
         console.log("💤 ESP32 Sleep Command. Terminating Gemini Session.");
@@ -552,7 +646,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     } else {
       // If asleep, wake it up!
       console.log("⏰ App Text Input Detected! Waking up Gemini...");
-      service.connect(lastLocationRef.current || undefined);
+      service.connect(lastLocationRef.current || undefined, geminiVoiceRef.current);
 
       // Wait for the WebSocket handshake to finish before sending the text
       let attempts = 0;
@@ -584,7 +678,13 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       const exists = await FileSystem.getInfoAsync(chatPath);
       if (exists.exists) {
         const data = await FileSystem.readAsStringAsync(chatPath);
-        setChatHistory(JSON.parse(data));
+        const loadedHistory = JSON.parse(data);
+        setChatHistory(loadedHistory);
+        const extractedImages = loadedHistory.filter((m: any) => m.imageUri).map((m: any) => m.imageUri as string);
+        setImages(extractedImages);
+
+        setCurrentSessionId(id);
+        currentSessionIdRef.current = id;
       }
     } catch (e) {
       console.error("Failed to load chat", e);
@@ -614,7 +714,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       startScan, startScanMock, isScanning, cameraIP, displayIP, isFullyConnected: !!(cameraIP && displayIP),
       images, isConnected, status, userTranscript, responseText, sendText, simulateBurst, chatHistory, setChatHistory,
       sessionHistory, createNewChat, loadChat, deleteChat,
-      searchSources, isLocationEnabled, setIsLocationEnabled, processingToolMessage
+      searchSources, isLocationEnabled, setIsLocationEnabled, processingToolMessage, geminiVoice, setGeminiVoice
     }}>
       {children}
     </AppContext.Provider>

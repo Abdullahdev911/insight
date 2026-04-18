@@ -103,12 +103,20 @@ void setupDisplay() {
 void showText() {
   display.clearDisplay();
   
-  // Custom logic for System statuses
+  // Custom logic for System statuses (Center vertically)
   if (currentText.indexOf("[ System: ") >= 0) {
     display.setTextSize(1);
-    display.setCursor(0, 24); // roughly centered
+    
+    // We want to extract just the message part if possible to center it
+    String cleanMsg = currentText;
+    cleanMsg.replace("[ System: ", "");
+    cleanMsg.replace(" ]", "");
+
+    // Roughly center text for 64px height display
+    // Each line in Size 1 is 8px high.
+    display.setCursor(0, 24); 
     display.setTextWrap(true);
-    display.print(currentText);
+    display.print(cleanMsg); // Use the cleaner version without brackets
     display.display();
     return;
   }
@@ -165,9 +173,13 @@ void webSocketEvent(uint8_t client, WStype_t type,
       if (msg == "CMD:CLEAR") {
         currentText = "";
       } else if (msg.indexOf("[ System:") >= 0) {
-        // Just directly show system status
+        // Just directly show system status (overwrites previous text)
         currentText = msg;
       } else {
+        // If we currently have a system status, clear it before starting new AI text
+        if (currentText.indexOf("[ System:") >= 0) {
+          currentText = "";
+        }
         currentText += msg; 
       }
 
