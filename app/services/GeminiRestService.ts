@@ -3,7 +3,7 @@
  * Handles batch processing for Passive Mode sessions (Multimodal)
  */
 
-const API_KEY = "AIzaSyDWyOZx7A2roaP6ygSIZULUlm9kgcnV92M";
+const API_KEY = "";
 const MODEL = "gemini-2.5-flash";
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${API_KEY}`;
 

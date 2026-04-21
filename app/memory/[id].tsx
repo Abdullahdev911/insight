@@ -1,4 +1,4 @@
-import { ChevronLeft, Clock, MessageSquare, Tag, Type, Send, Cpu, Mic } from 'lucide-react-native';
+import { ChevronLeft, Clock, MessageSquare, Tag, Type, Send, Cpu, Mic, Trash2 } from 'lucide-react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useState, useRef } from 'react';
 import { 
@@ -12,17 +12,20 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  TextInput
+  TextInput,
+  Alert
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as FileSystem from 'expo-file-system/legacy';
 import { GeminiRestService, PassiveSessionResult } from '../services/GeminiRestService';
+import { useApp } from '../context/AppContext';
 
 const { width } = Dimensions.get('window');
 
 export default function MemoryDetailScreen() {
   const { id } = useLocalSearchParams();
   const router = useRouter();
+  const { deleteChat } = useApp();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [chat, setChat] = useState<{role: string, text: string}[]>([]);
@@ -36,7 +39,11 @@ export default function MemoryDetailScreen() {
         const exists = await FileSystem.getInfoAsync(path);
         if (exists.exists) {
           const content = await FileSystem.readAsStringAsync(path);
-          setData(JSON.parse(content));
+          const parsed = JSON.parse(content);
+          setData(parsed);
+          if (parsed.chatHistory) {
+            setChat(parsed.chatHistory);
+          }
         }
       } catch (e) {
         console.error("Failed to load memory:", e);
@@ -54,16 +61,43 @@ export default function MemoryDetailScreen() {
     const userMsg = inputText;
     setInputText('');
     setChat(prev => [...prev, { role: 'user', text: userMsg }]);
-
+    
     try {
       const response = await GeminiRestService.queryMemory(data, userMsg);
-      setChat(prev => [...prev, { role: 'bot', text: response }]);
+      const newChat = [...chat, { role: 'user', text: userMsg }, { role: 'bot', text: response }];
+      setChat(newChat);
+
+      // Save to Disk
+      const path = `${FileSystem.documentDirectory}chat_${id}.json`;
+      await FileSystem.writeAsStringAsync(path, JSON.stringify({
+        ...data,
+        chatHistory: newChat
+      }));
     } catch (e) {
       console.error(e);
-      setChat(prev => [...prev, { role: 'bot', text: "Sorry, I couldn't process your request right now." }]);
+      const failedChat = [...chat, { role: 'user', text: userMsg }, { role: 'bot', text: "Sorry, I couldn't process your request right now." }];
+      setChat(failedChat);
     } finally {
       setIsAsking(false);
     }
+  };
+  
+  const handleDelete = () => {
+    Alert.alert(
+      "Delete Memory",
+      "Are you sure you want to permanently delete this memory?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Delete", 
+          style: "destructive",
+          onPress: async () => {
+            await deleteChat(id as string);
+            router.back();
+          }
+        }
+      ]
+    );
   };
 
   if (loading) {
@@ -96,6 +130,9 @@ export default function MemoryDetailScreen() {
           <Text className="text-white font-bold text-lg" numberOfLines={1}>{data.title}</Text>
           <Text className="text-white/40 text-xs">Passive Memory • 5 Mins</Text>
         </View>
+        <TouchableOpacity onPress={handleDelete} className="p-2 bg-red-500/10 rounded-full mr-2">
+            <Trash2 size={18} color="#ef4444" />
+        </TouchableOpacity>
         <View className="bg-primary/20 px-3 py-1 rounded-full flex-row items-center">
             <Tag size={12} color="#06b6d4" />
             <Text className="text-primary text-[10px] font-bold ml-1 uppercase">ARCHIVED</Text>
@@ -103,10 +140,15 @@ export default function MemoryDetailScreen() {
       </View>
 
       <KeyboardAvoidingView 
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
         className="flex-1"
       >
-        <ScrollView showsVerticalScrollIndicator={false} className="flex-1 px-5 pt-6">
+        <ScrollView 
+          showsVerticalScrollIndicator={false} 
+          className="flex-1 px-5 pt-6"
+          keyboardShouldPersistTaps="handled"
+        >
           
           {/* Summary Section */}
           <View className="bg-surfaceHighlight p-5 rounded-3xl mb-8 border border-white/5">
@@ -160,8 +202,8 @@ export default function MemoryDetailScreen() {
             </ScrollView>
           </View>
 
-          {/* Q&A Section */}
-          <View className="mb-10">
+          {/* Q&A Section History */}
+          <View className="mb-4">
              <View className="flex-row items-center mb-4">
                 <MessageSquare size={18} color="#06b6d4" />
                 <Text className="text-primary font-bold ml-2 uppercase tracking-widest text-xs">Ask Insight about this memory</Text>
@@ -199,27 +241,30 @@ export default function MemoryDetailScreen() {
                   <ActivityIndicator size="small" color="#06b6d4" style={{ alignSelf: 'flex-start' }} />
                </View>
              )}
-
-             <View className="flex-row items-center bg-surfaceHighlight rounded-3xl p-2 border border-white/10 mt-2">
-                <TextInput 
-                   placeholder="Ask about this memory..."
-                   placeholderTextColor="#64748b"
-                   className="flex-1 px-4 py-3 text-white"
-                   value={inputText}
-                   onChangeText={setInputText}
-                   onSubmitEditing={handleAsk}
-                />
-                <TouchableOpacity 
-                   onPress={handleAsk} 
-                   disabled={!inputText.trim() || isAsking}
-                   className={`p-3 rounded-full ${inputText.trim() && !isAsking ? 'bg-primary' : 'bg-white/5'}`}
-                >
-                   <Send size={20} color={inputText.trim() && !isAsking ? "black" : "#334155"} />
-                </TouchableOpacity>
-             </View>
           </View>
-
+          <View className="h-10" />
         </ScrollView>
+
+        {/* Input area fixed at bottom of KeyboardAvoidingView */}
+        <View className="px-5 py-4 bg-background border-t border-white/5">
+          <View className="flex-row items-center bg-surfaceHighlight rounded-3xl p-2 border border-white/10">
+            <TextInput 
+                placeholder="Ask about this memory..."
+                placeholderTextColor="#64748b"
+                className="flex-1 px-4 py-3 text-white"
+                value={inputText}
+                onChangeText={setInputText}
+                onSubmitEditing={handleAsk}
+            />
+            <TouchableOpacity 
+                onPress={handleAsk} 
+                disabled={!inputText.trim() || isAsking}
+                className={`p-3 rounded-full ${inputText.trim() && !isAsking ? 'bg-primary' : 'bg-white/5'}`}
+            >
+                <Send size={20} color={inputText.trim() && !isAsking ? "black" : "#334155"} />
+            </TouchableOpacity>
+          </View>
+        </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

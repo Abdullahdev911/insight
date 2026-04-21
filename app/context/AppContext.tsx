@@ -8,7 +8,7 @@ import { GeminiLiveService } from '../services/GeminiLiveService';
 import { GeminiRestService } from '../services/GeminiRestService';
 
 // ⚠️ Ensure your API key is loaded
-const API_KEY = "AIzaSyBFsCQTUBhC34pjmt05hLbUsT7qF-J2tPo"
+const API_KEY = ""
 
 // --- WAV BATCHING UTILITY ---
 const createWavFromChunks = (base64Chunks: string[], sampleRate: number = 24000): string => {
@@ -751,9 +751,18 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const deleteChat = async (id: string) => {
     try {
       const chatPath = `${FileSystem.documentDirectory}chat_${id}.json`;
-      const exists = await FileSystem.getInfoAsync(chatPath);
-      if (exists.exists) {
+      const rawPath = `${FileSystem.documentDirectory}raw_${id}.json`;
+      
+      const [chatExists, rawExists] = await Promise.all([
+        FileSystem.getInfoAsync(chatPath),
+        FileSystem.getInfoAsync(rawPath)
+      ]);
+
+      if (chatExists.exists) {
         await FileSystem.deleteAsync(chatPath);
+      }
+      if (rawExists.exists) {
+        await FileSystem.deleteAsync(rawPath);
       }
 
       const updatedHistory = sessionHistory.filter(session => session.id !== id);
