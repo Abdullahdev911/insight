@@ -256,14 +256,18 @@ export default function ActiveScreen() {
         <Text className="text-white/30 text-xs font-bold mb-4 uppercase tracking-wider">Previous</Text>
 
         <FlatList
-          data={sessionHistory}
+          data={sessionHistory.filter(s => !s.id.startsWith('passive_'))}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
             <View className="py-4 border-b border-white/5 flex-row items-center justify-between">
               <TouchableOpacity
                 className="flex-1 mr-2"
                 onPress={() => {
-                  loadChat(item.id);
+                  if (item.id.startsWith('passive_')) {
+                    router.push({ pathname: '/memory/[id]', params: { id: item.id } });
+                  } else {
+                    loadChat(item.id);
+                  }
                   toggleSidebar();
                 }}
               >

@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { Activity, Home, Layers, Settings } from 'lucide-react-native';
+import { Clock, Home, Layers, Settings } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function TabLayout() {
@@ -40,10 +40,10 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="activity"
+        name="memories"
         options={{
-          title: 'Logs',
-          tabBarIcon: ({ color }) => <Activity size={24} color={color} />,
+          title: 'Memories',
+          tabBarIcon: ({ color }) => <Clock size={24} color={color} />,
         }}
       />
       <Tabs.Screen

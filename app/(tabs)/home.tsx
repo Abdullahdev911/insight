@@ -1,4 +1,4 @@
-import { Battery, Eye, Mic, X } from 'lucide-react-native';
+import { Battery, Eye, Mic, X, Check } from 'lucide-react-native';
 import { Image, ScrollView, Text, TouchableOpacity, View, Modal, FlatList, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useApp } from '../context/AppContext';
@@ -6,7 +6,11 @@ import { useMemo, useState } from 'react';
 import { useRouter } from 'expo-router';
 
 export default function HomeScreen() {
-  const { images, sessionHistory, loadChat } = useApp();
+  const { 
+    images, sessionHistory, loadChat, 
+    isPassiveMode, togglePassiveMode, isProcessingPassive, passiveCountdown,
+    processingToolMessage 
+  } = useApp();
   const router = useRouter();
   
   const [isGalleryOpen, setIsGalleryOpen] = useState(false);
@@ -45,6 +49,10 @@ export default function HomeScreen() {
   const handleImageClick = (sessionId: string | 'active') => {
     setIsGalleryOpen(false);
     if (sessionId !== 'active') {
+      if (sessionId.startsWith('passive_')) {
+        router.push({ pathname: '/memory/[id]', params: { id: sessionId } });
+        return;
+      }
       loadChat(sessionId);
     }
     router.push('/(tabs)/active');
@@ -80,7 +88,16 @@ export default function HomeScreen() {
                 <View className="w-1 h-10 bg-primary rounded-full animate-pulse" />
                 <View className="w-1 h-5 bg-primary rounded-full animate-pulse" />
            </View>
-           <Text className="text-textDim mt-4">Wake Word: <Text className="text-primary font-bold">Active</Text></Text>
+           <Text className="text-textDim mt-4">
+             Wake Word: <Text className={isPassiveMode ? "text-yellow-500 font-bold" : "text-primary font-bold"}>
+               {isPassiveMode ? "Inactive" : "Active"}
+             </Text>
+           </Text>
+           {isPassiveMode && passiveCountdown !== null && (
+             <Text className="text-white text-2xl font-bold mt-2">
+               {Math.floor(passiveCountdown / 60)}:{(passiveCountdown % 60).toString().padStart(2, '0')}
+             </Text>
+           )}
         </View>
 
         {/* Quick Actions Grid */}
@@ -92,11 +109,14 @@ export default function HomeScreen() {
                 <Text className="text-text font-semibold">Ask AI</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity className="flex-1 bg-surfaceHighlight p-4 rounded-2xl h-32 justify-between border border-white/5">
-                <View className="bg-green-500/20 w-10 h-10 rounded-full items-center justify-center">
-                    <Eye size={20} color="#22c55e" />
+            <TouchableOpacity 
+                onPress={() => togglePassiveMode()}
+                className={`flex-1 p-4 rounded-2xl h-32 justify-between border ${isPassiveMode ? 'bg-yellow-500/10 border-yellow-500/50' : 'bg-surfaceHighlight border-white/5'}`}
+            >
+                <View className={`w-10 h-10 rounded-full items-center justify-center ${isPassiveMode ? 'bg-yellow-500/20' : 'bg-green-500/20'}`}>
+                    <Eye size={20} color={isPassiveMode ? "#eab308" : "#22c55e"} />
                 </View>
-                <Text className="text-text font-semibold">Start Passive Mode</Text>
+                <Text className="text-text font-semibold">{isPassiveMode ? 'Stop Passive Mode' : 'Start Passive Mode'}</Text>
             </TouchableOpacity>
         </View>
 
@@ -160,6 +180,29 @@ export default function HomeScreen() {
             />
         </View>
       </Modal>
+
+      {/* Processing Overlay */}
+      {isProcessingPassive && (
+        <View className="absolute inset-0 bg-black/90 items-center justify-center z-50">
+           <View className="bg-surfaceHighlight p-8 rounded-3xl items-center border border-white/10 mx-10">
+              <View className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mb-6" />
+              <Text className="text-text font-bold text-xl text-center">Processing Memory...</Text>
+              <Text className="text-textDim text-center mt-3 text-sm leading-5">
+                Insight is transcribing your audio and labeling images to create a rich summary. This will take a moment.
+              </Text>
+           </View>
+        </View>
+      )}
+
+      {/* Status Banner (Session Ready toast simulation) */}
+      {processingToolMessage && (
+        <View className="absolute bottom-10 left-5 right-5 bg-primary p-4 rounded-2xl flex-row items-center shadow-xl z-50">
+          <View className="bg-white/20 p-2 rounded-full mr-3">
+             <Check size={16} color="white" />
+          </View>
+          <Text className="text-white font-bold flex-1">{processingToolMessage}</Text>
+        </View>
+      )}
 
     </SafeAreaView>
   );

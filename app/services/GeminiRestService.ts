@@ -56,10 +56,10 @@ export class GeminiRestService {
 
     for (const img of images) {
       const cleanB64 = sanitizeBase64(img.b64);
-      if (cleanB64.length > 100) { 
+      if (cleanB64.length > 100) {
         try {
           atob(cleanB64);
-          
+
           validImageCount++;
           // Interleaving text explicitly anchors the AI to the correct sequential order
           imageParts.push({ text: `Image ${validImageCount}:` });
@@ -177,14 +177,14 @@ export class GeminiRestService {
     };
 
     try {
-      const response = await fetch(API_URL.replace("gemini-2.5-flash", "gemini-2.0-flash"), { // use fast free standard model for text queries
+      const response = await fetch(API_URL, { 
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
 
       if (!response.ok) throw new Error(await response.text());
-      
+
       const result = await response.json();
       const textResponse = result.candidates?.[0]?.content?.parts?.[0]?.text;
       return textResponse || "I'm sorry, I couldn't understand that.";

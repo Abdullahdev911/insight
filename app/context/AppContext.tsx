@@ -1,20 +1,32 @@
 import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import dgram from 'react-native-udp';
 import { GeminiLiveService } from '../services/GeminiLiveService';
+import { GeminiRestService } from '../services/GeminiRestService';
 
 // ⚠️ Ensure your API key is loaded
-const API_KEY = "AIzaSyALu-KEbUiA_73Ov7JRkX8dJGOSkWR--Qs"
+const API_KEY = "AIzaSyBFsCQTUBhC34pjmt05hLbUsT7qF-J2tPo"
 
 // --- WAV BATCHING UTILITY ---
 const createWavFromChunks = (base64Chunks: string[], sampleRate: number = 24000): string => {
   try {
     // 1. Decode and stitch all base64 chunks into one massive binary string
     let combinedPcmBinary = '';
-    for (const chunk of base64Chunks) {
-      combinedPcmBinary += atob(chunk);
+    for (let chunk of base64Chunks) {
+      // Sanitize chunk in case it was truncated during network transmission
+      chunk = chunk.replace(/[^A-Za-z0-9+/=]/g, "").replace(/=+$/, "");
+      if (chunk.length % 4 === 1) chunk = chunk.substring(0, chunk.length - 1);
+      const rem = chunk.length % 4;
+      if (rem !== 0) chunk = chunk.padEnd(chunk.length + (4 - rem), "=");
+      
+      try {
+        combinedPcmBinary += atob(chunk);
+      } catch (e) {
+        console.warn("[SYS] ⚠️ Dropping corrupted audio chunk.");
+      }
     }
 
     const dataLength = combinedPcmBinary.length;
@@ -105,6 +117,11 @@ interface AppContextType {
   geminiVoice: string;
   setGeminiVoice: (voice: string) => void;
   processingToolMessage: string | null;
+  // Passive Mode State
+  isPassiveMode: boolean;
+  togglePassiveMode: (state?: boolean) => Promise<void>;
+  isProcessingPassive: boolean;
+  passiveCountdown: number | null;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -131,6 +148,20 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const chatHistoryRef = useRef<ChatItem[]>([]);
   const [sessionHistory, setSessionHistory] = useState<SessionHistoryItem[]>([]);
   const sessionHistoryRef = useRef<SessionHistoryItem[]>([]);
+  
+  // Sync history state to ref for use in background logic
+  useEffect(() => {
+    sessionHistoryRef.current = sessionHistory;
+  }, [sessionHistory]);
+
+  // Background Queue Worker Trigger
+  useEffect(() => {
+    // Check queue on mount and every 2 minutes
+    processPendingQueue();
+    const interval = setInterval(processPendingQueue, 120000);
+    return () => clearInterval(interval);
+  }, []);
+
   const [processingToolMessage, setProcessingToolMessage] = useState<string | null>(null);
 
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -138,6 +169,17 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
 
   const [geminiVoice, setGeminiVoiceState] = useState('Zephyr');
   const geminiVoiceRef = useRef('Zephyr');
+
+  const [isPassiveMode, setIsPassiveMode] = useState(false);
+  const isPassiveModeRef = useRef(false);
+  const [isProcessingPassive, setIsProcessingPassive] = useState(false);
+  const [passiveCountdown, setPassiveCountdown] = useState<number | null>(null);
+  const passiveAudioChunksRef = useRef<string[]>([]);
+  const [passiveImages, setPassiveImages] = useState<{ uri: string, timestamp: number }[]>([]);
+  const passiveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const passiveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isProcessingQueueRef = useRef(false);
 
   const setGeminiVoice = (voice: string) => {
     if (voice === geminiVoiceRef.current) return;
@@ -151,35 +193,35 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
 
       // Save any ongoing message if bot was interrupted
       if (status === 'Speaking...' || status === 'Thinking...') {
-         const finalTranscript = userTranscriptRef.current;
-         const finalBotResponse = botResponseRef.current;
+        const finalTranscript = userTranscriptRef.current;
+        const finalBotResponse = botResponseRef.current;
 
-         setChatHistory(prev => {
-           let newHistory = [...prev];
-           if (finalTranscript.trim()) {
-             newHistory.push({ id: Date.now().toString() + '_user_int', text: finalTranscript + " [Interrupted]", sender: 'user', timestamp: Date.now() });
-           }
-           if (finalBotResponse.trim()) {
-             newHistory.push({ id: Date.now().toString() + '_bot_int', text: finalBotResponse + " [Interrupted - Voice Changed]", sender: 'bot', timestamp: Date.now() });
-           }
-           return newHistory;
-         });
+        setChatHistory(prev => {
+          let newHistory = [...prev];
+          if (finalTranscript.trim()) {
+            newHistory.push({ id: Date.now().toString() + '_user_int', text: finalTranscript + " [Interrupted]", sender: 'user', timestamp: Date.now() });
+          }
+          if (finalBotResponse.trim()) {
+            newHistory.push({ id: Date.now().toString() + '_bot_int', text: finalBotResponse + " [Interrupted - Voice Changed]", sender: 'bot', timestamp: Date.now() });
+          }
+          return newHistory;
+        });
 
-         setResponseText('');
-         botResponseRef.current = '';
-         setUserTranscript('');
-         userTranscriptRef.current = '';
+        setResponseText('');
+        botResponseRef.current = '';
+        setUserTranscript('');
+        userTranscriptRef.current = '';
       }
-      
+
       // Clear remaining pending audio from the queue to ensure old voice doesn't keep bleeding over
       audioQueue.current = [];
 
       service.disconnect();
       setTimeout(() => {
-         // Ensure they didn't rapidly change voice again within the timeout
-         if (geminiVoiceRef.current === voice) {
-           service.connect(lastLocationRef.current || undefined, voice);
-         }
+        // Ensure they didn't rapidly change voice again within the timeout
+        if (geminiVoiceRef.current === voice) {
+          service.connect(lastLocationRef.current || undefined, voice);
+        }
       }, 500); // give it time to close cleanly
     }
   };
@@ -207,9 +249,9 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
 
         if (existingSessionId) {
           // Update the existing session entry instead of duplicating it
-          updatedHistory = updatedHistory.map(session => 
-            session.id === existingSessionId 
-              ? { ...session, preview, images: sessionImages, timestamp: Date.now() } 
+          updatedHistory = updatedHistory.map(session =>
+            session.id === existingSessionId
+              ? { ...session, preview, images: sessionImages, timestamp: Date.now() }
               : session
           );
         } else {
@@ -249,7 +291,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     if (service) {
       console.log(`[SYS] 🔄 New Chat: ${shouldReconnect ? 'Restarting' : 'Disconnecting'} Gemini session...`);
       service.disconnect();
-      
+
       if (shouldReconnect) {
         // Reconnect after a brief pause to let the socket close cleanly
         setTimeout(() => {
@@ -444,17 +486,17 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
           if (displaySocketRef.current?.readyState === WebSocket.OPEN) {
             displaySocketRef.current.send("Goodbye!");
           }
-          
+
           responses.push({ id: call.id, name: call.name, response: { result: { success: true } } });
-          
+
           // Archive the current chat including a goodbye message, then clear the UI and disconnect
-          const goodbyeMsg: ChatItem = { 
-            id: 'end_conv_' + Date.now(), 
-            text: "Goodbye! 💤 (Conversation Ended)", 
-            sender: 'bot', 
-            timestamp: Date.now() 
+          const goodbyeMsg: ChatItem = {
+            id: 'end_conv_' + Date.now(),
+            text: "Goodbye! 💤 (Conversation Ended)",
+            sender: 'bot',
+            timestamp: Date.now()
           };
-          
+
           // Use createNewChat with shouldReconnect=false to archive and clear everything
           // We pass the final history slice to ensure "Goodbye" is saved
           await createNewChat(false, [...chatHistoryRef.current, goodbyeMsg]);
@@ -567,6 +609,10 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
 
       // 🚨 NEW: Intercept Hardware Commands
       if (msg === "CMD:WAKE") {
+        if (isPassiveModeRef.current) {
+          console.log("[SYS] 📻 Wake Word ignored during Passive Mode.");
+          return;
+        }
         console.log("⏰ ESP32 Wake Word Detected! Connecting to Gemini...");
         if (displaySocketRef.current?.readyState === WebSocket.OPEN) {
           displaySocketRef.current.send("CMD:CLEAR");
@@ -593,27 +639,38 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
 
         // ✅ ALWAYS show the image in the chat UI, regardless of Gemini state
         const uniqueId = 'img_' + Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9);
-        setChatHistory(prev => [...prev, {
-          id: uniqueId,
-          imageUri: `data:image/jpeg;base64,${base64}`,
-          sender: 'user',
-          timestamp: Date.now()
-        }]);
-        setImages(prev => [...prev, `data:image/jpeg;base64,${base64}`]);
+        const imageUri = `data:image/jpeg;base64,${base64}`;
 
-        // ✅ Send to Gemini if connected, otherwise queue it
-        const service = geminiServiceRef.current;
-        if (service?.isConnected) {
-          service.sendImage(base64);
-        } else if (service) {
-          // Queue for when Gemini connects (e.g. during handshake window after CMD:WAKE)
-          pendingImagesRef.current.push(base64);
-          console.log(`[SYS] 🕐 Image queued (Gemini not yet ready). Queue size: ${pendingImagesRef.current.length}`);
+        if (isPassiveModeRef.current) {
+          // Save to passive session images
+          setPassiveImages(prev => [...prev, { uri: imageUri, timestamp: Date.now() }]);
+        } else {
+          setChatHistory(prev => [...prev, {
+            id: uniqueId,
+            imageUri: imageUri,
+            sender: 'user',
+            timestamp: Date.now()
+          }]);
+          setImages(prev => [...prev, imageUri]);
+
+          // ✅ Send to Gemini if connected, otherwise queue it
+          const service = geminiServiceRef.current;
+          if (service?.isConnected) {
+            service.sendImage(base64);
+          } else if (service) {
+            // Queue for when Gemini connects (e.g. during handshake window after CMD:WAKE)
+            pendingImagesRef.current.push(base64);
+            console.log(`[SYS] 🕐 Image queued (Gemini not yet ready). Queue size: ${pendingImagesRef.current.length}`);
+          }
         }
       }
       else if (msg.startsWith("AUD:")) {
         const base64 = msg.replace("AUD:", "");
-        geminiServiceRef.current?.sendAudio(base64);
+        if (isPassiveModeRef.current) {
+          passiveAudioChunksRef.current.push(base64);
+        } else {
+          geminiServiceRef.current?.sendAudio(base64);
+        }
       }
     };
 
@@ -709,12 +766,214 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     }
   };
 
+  const togglePassiveMode = async (target?: boolean) => {
+    const nextState = target !== undefined ? target : !isPassiveMode;
+
+    if (nextState) {
+      console.log("[SYS] 📻 Passive Mode STARTING!");
+      isPassiveModeRef.current = true;
+      // 1. Reset state
+      passiveAudioChunksRef.current = [];
+      setPassiveImages([]);
+      setPassiveCountdown(300); // 5 minutes in seconds
+
+      // 2. Disconnect Gemini Live to save resources
+      geminiServiceRef.current?.disconnect();
+
+      // 3. Command Hardware
+      if (cameraIP && cameraSocketRef.current?.readyState === WebSocket.OPEN) {
+        cameraSocketRef.current.send("CMD:PASSIVE_ON");
+      }
+
+      // 4. Start Timers
+      setIsPassiveMode(true);
+
+      // 30s Image Capture Interval
+      passiveIntervalRef.current = setInterval(() => {
+        if (cameraSocketRef.current?.readyState === WebSocket.OPEN) {
+          cameraSocketRef.current.send("CMD:CAPTURE");
+        }
+      }, 30000);
+
+      // 5min Auto-End Timer
+      passiveTimerRef.current = setTimeout(() => {
+        togglePassiveMode(false);
+      }, 300000);
+
+      // Countdown Interval
+      countdownIntervalRef.current = setInterval(() => {
+        setPassiveCountdown(prev => (prev !== null && prev > 0) ? prev - 1 : 0);
+      }, 1000);
+
+    } else {
+      console.log("[SYS] 📡 Passive Mode ENDING!");
+      // 1. Clear All Timers
+      if (passiveTimerRef.current) clearTimeout(passiveTimerRef.current);
+      if (passiveIntervalRef.current) clearInterval(passiveIntervalRef.current);
+      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+
+      // 2. Command Hardware
+      if (cameraIP && cameraSocketRef.current?.readyState === WebSocket.OPEN) {
+        cameraSocketRef.current.send("CMD:PASSIVE_OFF");
+      }
+      
+      isPassiveModeRef.current = false;
+      setIsPassiveMode(false);
+      setPassiveCountdown(null);
+
+      // 3. Trigger Finalization
+      finalizePassiveSession();
+    }
+  };
+
+  const processPendingQueue = async () => {
+    if (isProcessingQueueRef.current) return;
+    isProcessingQueueRef.current = true;
+
+    try {
+      // 1. Check for pending_queue.json
+      const qPath = `${FileSystem.documentDirectory}pending_queue.json`;
+      const qInfo = await FileSystem.getInfoAsync(qPath);
+      if (!qInfo.exists) {
+        isProcessingQueueRef.current = false;
+        return;
+      }
+
+      const qData = await FileSystem.readAsStringAsync(qPath);
+      let queue: string[] = JSON.parse(qData);
+      if (queue.length === 0) {
+        isProcessingQueueRef.current = false;
+        return;
+      }
+
+      console.log(`[SYS] ⏳ processingPendingQueue: ${queue.length} sessions in queue.`);
+
+      // 2. Process one at a time
+      const sessionToProcess = queue[0];
+      const rawPath = `${FileSystem.documentDirectory}raw_${sessionToProcess}.json`;
+      
+      const rawInfo = await FileSystem.getInfoAsync(rawPath);
+      if (!rawInfo.exists) {
+        // Orphaned record, remove from queue
+        console.warn(`[SYS] ⚠️ Raw data for ${sessionToProcess} missing, cleaning up queue.`);
+        queue.shift();
+        await FileSystem.writeAsStringAsync(qPath, JSON.stringify(queue));
+        isProcessingQueueRef.current = false;
+        return;
+      }
+
+      const rawData = JSON.parse(await FileSystem.readAsStringAsync(rawPath));
+      
+      // 3. Call API
+      console.log(`[SYS] 📡 Attempting API process for ${sessionToProcess}...`);
+      const aiResult = await GeminiRestService.preprocessSession(rawData.audio, rawData.images);
+
+      // 4. Save result
+      const richSessionPath = `${FileSystem.documentDirectory}chat_${sessionToProcess}.json`;
+      const richData = {
+        ...aiResult,
+        images: rawData.displayImages,
+        type: 'passive',
+        processedAt: Date.now()
+      };
+      await FileSystem.writeAsStringAsync(richSessionPath, JSON.stringify(richData));
+
+      // 5. Update History State
+      setSessionHistory(prev => prev.map(s => 
+        s.id === sessionToProcess 
+          ? { ...s, preview: aiResult.title, status: 'completed' } 
+          : s
+      ));
+
+      // 6. Cleanup
+      await FileSystem.deleteAsync(rawPath);
+      queue.shift();
+      await FileSystem.writeAsStringAsync(qPath, JSON.stringify(queue));
+      
+      // Save updated history to disk
+      const hsPath = `${FileSystem.documentDirectory}session_history.json`;
+      await FileSystem.writeAsStringAsync(hsPath, JSON.stringify(sessionHistoryRef.current));
+
+      console.log(`[SYS] ✅ Session ${sessionToProcess} processed successfully!`);
+      
+    } catch (e) {
+      console.error("[SYS] ❌ processPendingQueue failed for this pass:", e);
+    } finally {
+      isProcessingQueueRef.current = false;
+    }
+  };
+
+  const finalizePassiveSession = async () => {
+    if (passiveAudioChunksRef.current.length === 0 && passiveImages.length === 0) {
+      console.log("[SYS] ⚠️ Passive session empty, skipping.");
+      return;
+    }
+
+    const sessionId = 'passive_' + Date.now();
+    console.log(`[SYS] 💾 Persisting raw session data: ${sessionId}`);
+
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      // 1. Initial Metadata
+      const newSession: SessionHistoryItem = {
+        id: sessionId,
+        timestamp: Date.now(),
+        preview: "Processing memory...",
+        images: passiveImages.map(img => img.uri),
+        status: 'pending'
+      };
+
+      // 2. Prep data for persistence
+      const audioB64 = createWavFromChunks(passiveAudioChunksRef.current, 16000);
+      const rawData = {
+        id: sessionId,
+        audio: audioB64,
+        images: passiveImages.map(img => ({
+          b64: img.uri.split('base64,')[1],
+          timestamp: img.timestamp
+        })),
+        displayImages: passiveImages.map(img => img.uri)
+      };
+
+      // 3. Write Raw Disk Cache (RESILIENCE)
+      const rawPath = `${FileSystem.documentDirectory}raw_${sessionId}.json`;
+      await FileSystem.writeAsStringAsync(rawPath, JSON.stringify(rawData));
+
+      // 4. Update Queue
+      const qPath = `${FileSystem.documentDirectory}pending_queue.json`;
+      let queue: string[] = [];
+      try {
+        const qData = await FileSystem.readAsStringAsync(qPath);
+        queue = JSON.parse(qData);
+      } catch (e) {}
+      queue.push(sessionId);
+      await FileSystem.writeAsStringAsync(qPath, JSON.stringify(queue));
+
+      // 5. Update History
+      const updatedHistory = [newSession, ...sessionHistoryRef.current];
+      setSessionHistory(updatedHistory);
+      const hsPath = `${FileSystem.documentDirectory}session_history.json`;
+      await FileSystem.writeAsStringAsync(hsPath, JSON.stringify(updatedHistory));
+
+      // 6. Trigger background worker immediately
+      processPendingQueue();
+
+    } catch (e) {
+      console.error("[SYS] ❌ Failed to persist passive session:", e);
+    } finally {
+      passiveAudioChunksRef.current = [];
+      setPassiveImages([]);
+    }
+  };
+
   return (
     <AppContext.Provider value={{
       startScan, startScanMock, isScanning, cameraIP, displayIP, isFullyConnected: !!(cameraIP && displayIP),
       images, isConnected, status, userTranscript, responseText, sendText, simulateBurst, chatHistory, setChatHistory,
       sessionHistory, createNewChat, loadChat, deleteChat,
-      searchSources, isLocationEnabled, setIsLocationEnabled, processingToolMessage, geminiVoice, setGeminiVoice
+      searchSources, isLocationEnabled, setIsLocationEnabled, processingToolMessage, geminiVoice, setGeminiVoice,
+      isPassiveMode, togglePassiveMode, isProcessingPassive, passiveCountdown
     }}>
       {children}
     </AppContext.Provider>

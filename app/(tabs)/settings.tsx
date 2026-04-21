@@ -4,7 +4,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useApp } from './../context/AppContext';
 
 export default function SettingsScreen() {
-  const { isLocationEnabled, setIsLocationEnabled, geminiVoice, setGeminiVoice } = useApp();
+  const { 
+    isLocationEnabled, setIsLocationEnabled, 
+    geminiVoice, setGeminiVoice,
+    isPassiveMode, togglePassiveMode 
+  } = useApp();
 
   const VOICES = [
     { id: 'Puck', label: 'Puck (Default)' },
@@ -28,6 +32,15 @@ export default function SettingsScreen() {
                 <View className="p-4 flex-row justify-between items-center border-b border-white/5">
                     <Text className="text-text font-medium">Wake Word Sensitivity</Text>
                     <Switch trackColor={{ false: "#334155", true: "#06b6d4" }} thumbColor={"#f8fafc"} value={true} />
+                </View>
+                <View className="p-4 flex-row justify-between items-center border-b border-white/5">
+                    <Text className="text-text font-medium">Passive Mode</Text>
+                    <Switch 
+                      trackColor={{ false: "#334155", true: "#06b6d4" }} 
+                      thumbColor={"#f8fafc"} 
+                      value={isPassiveMode} 
+                      onValueChange={() => togglePassiveMode()} 
+                    />
                 </View>
                 <View className="p-4 flex-row justify-between items-center">
                     <Text className="text-text font-medium">Passive Mode Interval</Text>

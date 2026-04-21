@@ -45,6 +45,7 @@ unsigned long lastSoundTime = 0;
 // Task Synchronization Flags
 volatile bool triggerImage = false;
 volatile bool forceSleep = false;
+volatile bool isPassive = false; // 🚨 NEW: Passive Mode Flag
 SemaphoreHandle_t wsMutex;
 
 // =======================================================
@@ -158,8 +159,8 @@ void setupMic() {
     .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
     .communication_format = I2S_COMM_FORMAT_I2S_MSB,
     .intr_alloc_flags = ESP_INTR_FLAG_LOWMED,
-    .dma_buf_count = 8,   // 🚨 FIX: Increased from 6 to 8 to buffer CPU spikes
-    .dma_buf_len = 512    // 🚨 FIX: Increased from 128 to 512 for stability
+    .dma_buf_count = 4,   // 🚨 STABILITY: Reduced to save RAM
+    .dma_buf_len = 256    // 🚨 STABILITY: Reduced to save RAM
   };
 
   i2s_pin_config_t pins = {
@@ -274,8 +275,13 @@ void soundTask(void *param) {
     // STATE 1: IDLE (Waiting for Wake Word)
     // ---------------------------------------------------------
     if (!isAwake) {
-      if (level > WAKE_THRESHOLD) {
-        Serial.println("\n⏰ [STATE] WAKE WORD DETECTED! Connecting to Gemini...");
+      if (level > WAKE_THRESHOLD || isPassive) {
+        if (isPassive) {
+          Serial.println("\n📻 [STATE] PASSIVE LONG-TERM RECORDING START!");
+        } else {
+          Serial.println("\n⏰ [STATE] WAKE WORD DETECTED! Connecting to Gemini...");
+        }
+        
         isAwake = true;
         imagesSent = 0;
         
@@ -285,7 +291,8 @@ void soundTask(void *param) {
         micBufferLen = 0; 
         
         if (xSemaphoreTake(wsMutex, portMAX_DELAY) == pdTRUE) {
-          webSocket.sendTXT(connectedClient, "CMD:WAKE");
+          // Only send WAKE if NOT in passive mode (app already knows about passive)
+          if (!isPassive) webSocket.sendTXT(connectedClient, "CMD:WAKE");
           xSemaphoreGive(wsMutex);
         }
       }
@@ -324,7 +331,8 @@ void soundTask(void *param) {
       }
 
       // Terminate conversation after silence or forced sleep
-      if (forceSleep || (millis() - lastActivityTime > SLEEP_TIMEOUT)) {
+      // 🚨 PASSIVE MODE: Never timeout due to silence
+      if (!isPassive && (forceSleep || (millis() - lastActivityTime > SLEEP_TIMEOUT))) {
         if (forceSleep) {
           Serial.println("\n💤 [STATE] Forced Sleep Requested. Going to Sleep.");
           forceSleep = false;
@@ -336,6 +344,14 @@ void soundTask(void *param) {
           }
         }
         isAwake = false;
+      }
+      
+      // If forced sleep arrives during passive mode, we exit passive
+      if (isPassive && forceSleep) {
+         Serial.println("\n💤 [STATE] Passive Mode Terminated Manually.");
+         forceSleep = false;
+         isPassive = false;
+         isAwake = false;
       }
     }
   }
@@ -360,15 +376,22 @@ void webSocketEvent(uint8_t client, WStype_t type,
       break;
 
     case WStype_TEXT: {
-      String msg = String((char*)payload);
-      // Null-terminate explicitly just to be safe if payload isn't
-      // msg = msg.substring(0, length);
+      if (length == 0) break;
+      String msg = String((const char*)payload, length);
+      
       if (msg.startsWith("CMD:CAPTURE")) {
         Serial.println("📸 App Requested Image Capture!");
         triggerImage = true;
       } else if (msg.startsWith("CMD:SLEEP")) {
         Serial.println("💤 App Requested Module Sleep!");
         forceSleep = true;
+      } else if (msg.startsWith("CMD:PASSIVE_ON")) {
+        Serial.println("📻 App Requested Passive Mode ON!");
+        isPassive = true;
+      } else if (msg.startsWith("CMD:PASSIVE_OFF")) {
+        Serial.println("📡 App Requested Passive Mode OFF!");
+        isPassive = false;
+        forceSleep = true; 
       }
       break;
     }
@@ -396,11 +419,11 @@ void setup() {
   xTaskCreatePinnedToCore(
     soundTask,
     "soundTask",
-    16384, // 🚨 FIX: Bumped stack size heavily to accommodate massive buffers
+    8192, // 🚨 STABILITY: Reduced stack
     NULL,
     1,
     NULL,
-    0 // 🚨 FIX: Pinnned to Core 0 (Loop and WiFi usually run heavily on Core 1)
+    0 
   );
 
   Serial.println("🚀 Vision/Audio Node Ready");
