@@ -1,24 +1,25 @@
-import { Cpu, Globe, Menu, Mic, Plus, Send, X, Trash2 } from 'lucide-react-native';
+import { Cpu, Globe, Menu, Mic, Plus, Send, Trash2, X } from 'lucide-react-native';
 import React, { useRef, useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
   Animated,
   Dimensions,
   FlatList,
   Image,
   Keyboard,
   KeyboardAvoidingView,
-  ActivityIndicator,
   Linking,
   Modal,
   Platform,
   Text,
   TextInput,
   TouchableOpacity,
-  View,
-  Alert
+  View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useApp } from '../context/AppContext';
+import { GeminiRestService } from '../services/GeminiRestService';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -30,8 +31,6 @@ export default function ActiveScreen() {
   } = useApp();
 
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
-
-
 
   // Chat State
   const [inputText, setInputText] = useState('');
@@ -52,19 +51,77 @@ export default function ActiveScreen() {
     setIsSidebarOpen(!isSidebarOpen);
   };
 
-
-  // --- Message Handling ---
-  const handleSendText = () => {
+  
+// --- Message Handling ---
+  const handleSendText = async () => {
     if (!inputText.trim()) return;
 
-    // Just call sendText! AppContext will automatically add it to the chat history.
-    if (sendText) {
-      sendText(inputText);
-    }
-
+    const userQuery = inputText.trim();
+    const lowerInput = userQuery.toLowerCase();
+    
+    // Clear the input box immediately
     setInputText('');
-  };
 
+    // --- 1. Filter: Does the user want to CREATE an AI Image? ---
+    // Matches words like: create, generate, make, draw + image, pic, photo
+    const isGenerateRequest = /(create|generate|make|draw).*(image|picture|pic|photo)/i.test(lowerInput);
+
+    // --- 2. Filter: Does the user want to SEARCH for a REAL Image? ---
+    // Matches words like: search, find, show, display + image, pic, photo
+    const isSearchRequest = /(search|find|show|display).*(image|picture|pic|photo)/i.test(lowerInput);
+
+
+    // =================================================================
+    // BRANCH A: CREATE AI IMAGE
+    // =================================================================
+    if (isGenerateRequest) {
+      const userMsg = { id: Date.now().toString(), sender: 'user' as const, text: userQuery, timestamp: Date.now() };
+      setChatHistory(prev => [...prev, userMsg]);
+
+      const loadingId = "loading_" + Date.now();
+      setChatHistory(prev => [...prev, { id: loadingId, sender: 'bot' as const, text: 'Generating AI image...', timestamp: Date.now() }]);
+
+      const imageUrl = await GeminiRestService.generateImageFromGemini(userQuery);
+
+      setChatHistory(prev => {
+        const filtered = prev.filter(msg => msg.id !== loadingId);
+        return [...filtered, {
+          id: Date.now().toString(), sender: 'bot' as const,
+          text: imageUrl ? "Here is the AI-generated image:" : "Sorry, I couldn't generate that image.",
+          imageUri: imageUrl || undefined, timestamp: Date.now()
+        }];
+      });
+
+    // =================================================================
+    // BRANCH B: SEARCH REAL IMAGE
+    // =================================================================
+    } else if (isSearchRequest) {
+      const userMsg = { id: Date.now().toString(), sender: 'user' as const, text: userQuery, timestamp: Date.now() };
+      setChatHistory(prev => [...prev, userMsg]);
+
+      const loadingId = "loading_" + Date.now();
+      setChatHistory(prev => [...prev, { id: loadingId, sender: 'bot' as const, text: 'Searching the web for images...', timestamp: Date.now() }]);
+
+      const imageUrl = await GeminiRestService.searchImageOnline(userQuery);
+
+      setChatHistory(prev => {
+        const filtered = prev.filter(msg => msg.id !== loadingId);
+        return [...filtered, {
+          id: Date.now().toString(), sender: 'bot' as const,
+          text: imageUrl ? "I found this image online for you:" : "Sorry, I couldn't find any images for that.",
+          imageUri: imageUrl || undefined, timestamp: Date.now()
+        }];
+      });
+
+    // =================================================================
+    // BRANCH C: NORMAL TEXT CHAT
+    // =================================================================
+    } else {
+      if (sendText) {
+        sendText(userQuery);
+      }
+    }
+  };
   // Render Chat Bubbles
   const renderMessage = ({ item }: { item: any }) => {
     const isUser = item.sender === 'user';
@@ -88,8 +145,8 @@ export default function ActiveScreen() {
 
         {/* Inline Media Rendering */}
         {item.imageUri && (
-          <TouchableOpacity onPress={() => setExpandedImage(item.imageUri)} activeOpacity={0.8} className="mb-2">
-            <Image source={{ uri: item.imageUri }} className="w-60 h-40 rounded-xl bg-black/40" resizeMode="cover" />
+          <TouchableOpacity onPress={() => setExpandedImage(item.imageUri)} activeOpacity={0.8} className="mb-2 mt-1">
+            <Image source={{ uri: item.imageUri }} className="w-60 h-60 rounded-xl bg-black/40" resizeMode="cover" />
           </TouchableOpacity>
         )}
 
@@ -264,7 +321,8 @@ export default function ActiveScreen() {
                 className="flex-1 mr-2"
                 onPress={() => {
                   if (item.id.startsWith('passive_')) {
-                    router.push({ pathname: '/memory/[id]', params: { id: item.id } });
+                    // Make sure 'router' is imported or available if using expo-router
+                    // router.push({ pathname: '/memory/[id]', params: { id: item.id } });
                   } else {
                     loadChat(item.id);
                   }

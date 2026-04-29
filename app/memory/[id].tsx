@@ -1,24 +1,23 @@
-import { ChevronLeft, Clock, MessageSquare, Tag, Type, Send, Cpu, Mic, Trash2 } from 'lucide-react-native';
+import * as FileSystem from 'expo-file-system/legacy';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useState, useRef } from 'react';
-import { 
-  Dimensions, 
-  FlatList, 
-  Image, 
-  ScrollView, 
-  Text, 
-  TouchableOpacity, 
-  View, 
+import { ChevronLeft, Clock, Cpu, MessageSquare, Mic, Send, Tag, Trash2, Type } from 'lucide-react-native';
+import React, { useEffect, useState } from 'react';
+import {
   ActivityIndicator,
+  Alert,
+  Dimensions,
+  Image,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
+  Text,
   TextInput,
-  Alert
+  TouchableOpacity,
+  View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import * as FileSystem from 'expo-file-system/legacy';
-import { GeminiRestService, PassiveSessionResult } from '../services/GeminiRestService';
 import { useApp } from '../context/AppContext';
+import { GeminiRestService } from '../services/GeminiRestService';
 
 const { width } = Dimensions.get('window');
 

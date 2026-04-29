@@ -21,9 +21,14 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "permissions": [
+        "SEND_SMS",
+        "READ_CONTACTS",
         "android.permission.BLUETOOTH",
         "android.permission.BLUETOOTH_ADMIN",
-        "android.permission.BLUETOOTH_CONNECT"
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "com.android.alarm.permission.SET_ALARM"
       ],
       "package": "com.abdu911.Insight"
     },
@@ -70,7 +75,7 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "c43aed72-2bc0-498c-99da-7fade8a1314c"
+        "projectId": "abb82415-6885-47b1-bd86-655bb9ad1d95"
       }
     }
   }

@@ -14,6 +14,7 @@ export class GeminiLiveService {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private lastLatLng?: { latitude: number; longitude: number };
   private intentionalDisconnect: boolean = false;
+  private lastVoiceName: string = 'Zephyr'; 
 
   private listeners: any = {
     onTextResponse: null,
@@ -36,7 +37,7 @@ export class GeminiLiveService {
 
     this.intentionalDisconnect = false;
     this.lastLatLng = latLng;
-
+    this.lastVoiceName = voiceName; 
     const model = 'models/gemini-2.5-flash-native-audio-preview-12-2025';
     const url = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${this.apiKey}`;
 
@@ -107,8 +108,8 @@ export class GeminiLiveService {
     };
   }
 
-  private sendSetupMessage(model: string, latLng?: { latitude: number; longitude: number }, voiceName: string = 'Zephyr') {
-    // 1. Define the Persona & THE IRONCLAD SCRIPT BAN
+ private sendSetupMessage(model: string, latLng?: { latitude: number; longitude: number }, voiceName: string = 'Zephyr') {
+    // 1. Define the Persona, THE IRONCLAD SCRIPT BAN & TIMEZONE RULE
     const baseSystemPrompt = `You are Insight, an advanced AI assistant powering a pair of smart glasses. 
 Your responses are delivered via an audio speaker and a small OLED display, so keep your answers concise, natural, and highly conversational. 
 
@@ -119,7 +120,9 @@ CRITICAL TRANSCRIPTION & LANGUAGE LOCK: The user will strictly and exclusively s
 * NEVER transcribe it in Hindi (Devanagari script). 
 * NEVER transcribe in Malayalam, Arabic, or any other language's alphabet. 
 
-2. OUTPUT RULE: You must only speak and respond in English or Urdu. If you hear background noise, ignore it entirely. Do not attempt to translate or transcribe background noise.`;
+2. OUTPUT RULE: You must only speak and respond in English or Urdu. If you hear background noise, ignore it entirely. Do not attempt to translate or transcribe background noise.
+
+3. TIME & ALARMS RULE: You are in Karachi, Pakistan. Current user time is Karachi time. Always use 24-hour format for the hour parameter when setting alarms.`; // 👈 Yeh nayi line yahan add ho gayi hai
 
     // 2. Dynamically Append Location Context
     let finalSystemPrompt = baseSystemPrompt;
@@ -174,6 +177,54 @@ CRITICAL TRANSCRIPTION & LANGUAGE LOCK: The user will strictly and exclusively s
                 parameters: {
                   type: "OBJECT",
                   properties: {}
+                }
+              },
+              // NEW SMS TOOL FOR HANDS-FREE SENDING
+              {
+                name: "sendSilentSMS",
+                description: "Sends an SMS message directly in the background. CRITICAL RULE: You MUST first verbally tell the user what the message says and explicitly ask for their confirmation (e.g., 'The message to Hasan says: Project is ready. Should I send it?'). ONLY call this function AFTER the user says 'yes', 'send it', or agrees.",
+                parameters: {
+                  type: "OBJECT",
+                  properties: {
+                    contactName: { type: "STRING", description: "The exact name of the person to text (e.g., Hasan)" },
+                    message: { type: "STRING", description: "The actual message content" }
+                  },
+                  required: ["contactName", "message"]
+                }
+              },
+              {
+                name: "getCurrentLocation",
+                description: "Gets the user's exact current GPS coordinates (latitude, longitude) from their device. Always call this first if the user asks where they are or searches for nearby places."
+              }, // 👈 Yahan ek extra comma (,) tha jis se code crash ho sakta tha, maine hata diya hai.
+              {
+                name: "searchGoogleMaps",
+                description: "CRITICAL & MANDATORY TOOL: ALWAYS use this tool to find places, restaurants, buildings (e.g., KTrade), or locations. It returns addresses, timings, phone numbers, and coordinates. Use the returned coordinates to calculate the distance from the user if asked.",
+                parameters: {
+                  type: "OBJECT",
+                  properties: {
+                    query: { type: "STRING", description: "What to search for (e.g. 'KFC at shahrafaisal')." },
+                    latitude: { type: "NUMBER", description: "Latitude." },
+                    longitude: { type: "NUMBER", description: "Longitude." }
+                  },
+                  required: ["query"]
+                }
+              },
+              {
+                name: "setAlarm",
+                description: "Sets a recurring or one-time alarm at a specific time. Call this when the user asks to set an alarm or reminder for a specific time or day.",
+                parameters: {
+                  type: "OBJECT",
+                  properties: {
+                    hour: { type: "NUMBER", description: "Hour in 24-hour format (0-23)." },
+                    minute: { type: "NUMBER", description: "Minutes (0-59)." },
+                    days: { 
+                      type: "ARRAY", 
+                      items: { type: "NUMBER" }, 
+                      description: "Days of week: 1=Sunday, 2=Monday, 3=Tuesday, 4=Wednesday, 5=Thursday, 6=Friday, 7=Saturday. Leave empty for a one-time alarm." 
+                    },
+                    title: { type: "STRING", description: "Title of the alarm (e.g., 'Wake up', 'Medicine time')." }
+                  },
+                  required: ["hour", "minute"]
                 }
               }
             ]
@@ -325,7 +376,6 @@ CRITICAL TRANSCRIPTION & LANGUAGE LOCK: The user will strictly and exclusively s
         },
       };
 
-      // console.log(`[TX] 🎤 Streaming Audio Chunk (Size: ${cleanBase64.length})`);~
       this.ws.send(JSON.stringify(payload));
     } catch (e) {
       console.error('[TX] ❌ Failed to send audio chunk:', e);

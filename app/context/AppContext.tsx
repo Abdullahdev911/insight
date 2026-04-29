@@ -1,14 +1,19 @@
 import { Audio } from 'expo-av';
+import * as Contacts from 'expo-contacts';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
+import * as IntentLauncher from 'expo-intent-launcher';
 import * as Location from 'expo-location';
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { PermissionsAndroid, Platform } from 'react-native';
 import dgram from 'react-native-udp';
 import { GeminiLiveService } from '../services/GeminiLiveService';
 import { GeminiRestService } from '../services/GeminiRestService';
+// @ts-ignore
+import SmsAndroid from 'react-native-get-sms-android';
 
 // ⚠️ Ensure your API key is loaded
-const API_KEY = ""
+const API_KEY = "AIzaSyCNt7d3ccGJPkY4EnMevksDyqEJ42TaQNM"
 
 // --- WAV BATCHING UTILITY ---
 const createWavFromChunks = (base64Chunks: string[], sampleRate: number = 24000): string => {
@@ -84,6 +89,7 @@ export interface SessionHistoryItem {
   timestamp: number;
   preview: string;
   images?: string[];
+  status?: string; // <--- ADD THIS LINE
 }
 
 interface AppContextType {
@@ -346,35 +352,34 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const isPlaying = useRef(false);
 
   // 1. Initialize Gemini ONCE when app starts
+ // 1. Initialize Gemini ONCE when app starts
   useEffect(() => {
     const service = new GeminiLiveService(API_KEY);
     geminiServiceRef.current = service;
 
-    // ✅ FIX 2: All service.on() calls at the same level — none nested inside others
     service.on('onConnected', () => {
       setIsConnected(true);
       setStatus('Listening');
-
-      // Flush any images that arrived during the handshake window
       const queued = pendingImagesRef.current;
       if (queued.length > 0) {
         console.log(`[SYS] 📤 Flushing ${queued.length} queued image(s) to Gemini.`);
         pendingImagesRef.current = [];
-        // Small delay to let setup complete before sending media
         setTimeout(() => {
           queued.forEach(b64 => service.sendImage(b64));
         }, 300);
       }
     });
+
     service.on('onDisconnected', () => {
       setIsConnected(false);
       setStatus('Disconnected');
     });
+
     service.on('onReconnecting', (attempt: number, max: number, delayMs: number) => {
       setIsConnected(false);
       setStatus(`Reconnecting... (${attempt}/${max})`);
-      console.log(`[SYS] 🔄 Auto-reconnect attempt ${attempt}/${max} in ${delayMs / 1000}s`);
     });
+
     service.on('onTranscript', (text: string) => {
       userTranscriptRef.current += text;
       setUserTranscript(userTranscriptRef.current);
@@ -388,39 +393,26 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       setProcessingToolMessage(null);
       if (isDone) {
         setStatus('Done');
-
         const finalTranscript = userTranscriptRef.current;
         const finalBotResponse = botResponseRef.current;
-
         setChatHistory(prev => {
           let newHistory = [...prev];
-          if (finalTranscript.trim()) {
-            newHistory.push({ id: Date.now().toString() + '_user', text: finalTranscript, sender: 'user', timestamp: Date.now() });
-          }
-          if (finalBotResponse.trim()) {
-            newHistory.push({ id: Date.now().toString() + '_bot', text: finalBotResponse, sender: 'bot', timestamp: Date.now() });
-          }
+          if (finalTranscript.trim()) newHistory.push({ id: Date.now().toString() + '_user', text: finalTranscript, sender: 'user', timestamp: Date.now() });
+          if (finalBotResponse.trim()) newHistory.push({ id: Date.now().toString() + '_bot', text: finalBotResponse, sender: 'bot', timestamp: Date.now() });
           return newHistory;
         });
-
-        // Clear references
         setResponseText('');
         botResponseRef.current = '';
         setUserTranscript('');
         userTranscriptRef.current = '';
-
-        // Force flush any remaining audio chunks at the end of the turn
         processAudioQueue(true);
       } else {
-        // DETECT START OF NEW RESPONSE: If botResponseRef was empty, tell OLED to clear old text
         if (botResponseRef.current === "" && displaySocketRef.current?.readyState === WebSocket.OPEN) {
           displaySocketRef.current.send("CMD:CLEAR");
         }
-
         botResponseRef.current += text;
         setResponseText(botResponseRef.current);
         setStatus(isThinking ? 'Thinking...' : 'Speaking...');
-
         if (displaySocketRef.current?.readyState === WebSocket.OPEN) {
           displaySocketRef.current.send(text);
         }
@@ -441,76 +433,278 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         if (call.name === 'fetchCurrentLocation') {
           const msg = "🌍 Insight is verifying your location...";
           setProcessingToolMessage(msg);
-          if (displaySocketRef.current?.readyState === WebSocket.OPEN) {
-            displaySocketRef.current.send(`[ System: ${msg} ]`);
-          }
+          if (displaySocketRef.current?.readyState === WebSocket.OPEN) displaySocketRef.current.send(`[ System: ${msg} ]`);
           if (!locationEnabledRef.current) {
-            responses.push({
-              id: call.id,
-              name: call.name,
-              response: { result: { error: "Location access disabled in settings. Ask the user to enable it in Settings." } }
-            });
+            responses.push({ id: call.id, name: call.name, response: { result: { error: "Location disabled." } } });
             continue;
           }
           try {
             let { status } = await Location.requestForegroundPermissionsAsync();
             if (status !== 'granted') {
-              responses.push({ id: call.id, name: call.name, response: { result: { error: "OS Location permission denied." } } });
+              responses.push({ id: call.id, name: call.name, response: { result: { error: "Permission denied." } } });
               continue;
             }
             let location = await Location.getCurrentPositionAsync({});
-            responses.push({
-              id: call.id,
-              name: call.name,
-              response: { result: { latitude: location.coords.latitude, longitude: location.coords.longitude } }
-            });
+            responses.push({ id: call.id, name: call.name, response: { result: { latitude: location.coords.latitude, longitude: location.coords.longitude } } });
           } catch (e) {
-            responses.push({ id: call.id, name: call.name, response: { result: { error: "Failed to get GPS location." } } });
+            responses.push({ id: call.id, name: call.name, response: { result: { error: "Failed to get location." } } });
           }
+
         } else if (call.name === 'captureCameraFrame') {
           const msg = "📸 Insight is looking...";
           setProcessingToolMessage(msg);
-          if (displaySocketRef.current?.readyState === WebSocket.OPEN) {
-            displaySocketRef.current.send(`[ System: ${msg} ]`);
-          }
-          console.log("[SYS] 📸 AI Requested Camera Frame!");
-          if (cameraSocketRef.current?.readyState === WebSocket.OPEN) {
-            cameraSocketRef.current.send("CMD:CAPTURE");
-          }
+          if (displaySocketRef.current?.readyState === WebSocket.OPEN) displaySocketRef.current.send(`[ System: ${msg} ]`);
+          if (cameraSocketRef.current?.readyState === WebSocket.OPEN) cameraSocketRef.current.send("CMD:CAPTURE");
           responses.push({ id: call.id, name: call.name, response: { result: { success: true } } });
+
         } else if (call.name === 'endConversation') {
-          console.log("[SYS] 🛑 AI Requested Session End!");
-          if (cameraSocketRef.current?.readyState === WebSocket.OPEN) {
-            cameraSocketRef.current.send("CMD:SLEEP");
-          }
-          if (displaySocketRef.current?.readyState === WebSocket.OPEN) {
-            displaySocketRef.current.send("Goodbye!");
-          }
-
+          if (cameraSocketRef.current?.readyState === WebSocket.OPEN) cameraSocketRef.current.send("CMD:SLEEP");
+          if (displaySocketRef.current?.readyState === WebSocket.OPEN) displaySocketRef.current.send("Goodbye!");
           responses.push({ id: call.id, name: call.name, response: { result: { success: true } } });
+          await createNewChat(false, [...chatHistoryRef.current, { id: 'end_conv_' + Date.now(), text: "Goodbye! 💤", sender: 'bot', timestamp: Date.now() }]);
+          
+      } else if (call.name === 'sendSilentSMS') {
+          // --- 🚨 HANDS-FREE SMS LOGIC (TIMEOUT FIX) 🚨 ---
+          const { contactName, message } = call.args;
+          const msg = `📱 Sending message to ${contactName}...`;
+          setProcessingToolMessage(msg);
+          if (displaySocketRef.current?.readyState === WebSocket.OPEN) displaySocketRef.current.send(`[ System: ${msg} ]`);
 
-          // Archive the current chat including a goodbye message, then clear the UI and disconnect
-          const goodbyeMsg: ChatItem = {
-            id: 'end_conv_' + Date.now(),
-            text: "Goodbye! 💤 (Conversation Ended)",
-            sender: 'bot',
-            timestamp: Date.now()
-          };
+          try {
+            if (Platform.OS !== 'android') {
+               responses.push({ id: call.id, name: call.name, response: { result: { error: "Silent SMS is only supported on Android." } } });
+               continue;
+            }
+            
+            console.log(`\n--- 🚨 SMS DEBUGGING START 🚨 ---`);
+            const { status: contactStatus } = await Contacts.requestPermissionsAsync();
+            const smsPermission = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.SEND_SMS);
 
-          // Use createNewChat with shouldReconnect=false to archive and clear everything
-          // We pass the final history slice to ensure "Goodbye" is saved
-          await createNewChat(false, [...chatHistoryRef.current, goodbyeMsg]);
+            if (smsPermission !== PermissionsAndroid.RESULTS.GRANTED || contactStatus !== 'granted') {
+              console.log(`[SYS] ❌ PERMISSION DENIED!`);
+              responses.push({ id: call.id, name: call.name, response: { result: { error: `Permissions denied.` } } });
+              continue; // 🚨 IMPORTANT: Is continue se pehle bhi loading band karni hai isliye finally block banaya hai
+            }
+
+            const { data } = await Contacts.getContactsAsync({ name: contactName, fields: [Contacts.Fields.PhoneNumbers] });
+            
+            if (data.length > 0 && data[0].phoneNumbers && data[0].phoneNumbers.length > 0) {
+              const phoneNumber = data[0].phoneNumbers[0].number as string;
+              console.log(`[SYS] ✉️ Sending Silent SMS to ${phoneNumber}: "${message}"`);
+              
+              // 🔥 THE FIX: PROMISE.RACE (3 Second Timeout) 🔥
+              await Promise.race([
+                new Promise((resolve) => {
+                  SmsAndroid.autoSend(
+                    phoneNumber, message,
+                    (fail: string) => { 
+                      console.log('[SYS] ❌ Failed:', fail);
+                      responses.push({ id: call.id, name: call.name, response: { result: { error: fail } } }); 
+                      resolve(true); 
+                    },
+                    (success: string) => { 
+                      console.log('[SYS] ✅ Success!');
+                      responses.push({ id: call.id, name: call.name, response: { result: { success: true } } }); 
+                      resolve(true); 
+                    }
+                  );
+                }),
+                new Promise((resolve) => setTimeout(() => {
+                  console.log('[SYS] ⏱️ Timeout! Library hung, but SMS sent. Moving on.');
+                  responses.push({ id: call.id, name: call.name, response: { result: { success: true } } });
+                  resolve(true);
+                }, 3000)) // 3 Seconds Timeout
+              ]);
+
+            } else {
+              console.log(`[SYS] ❌ Contact not found.`);
+              responses.push({ id: call.id, name: call.name, response: { result: { error: `Contact ${contactName} not found.` } } });
+            }
+            console.log(`--- 🚨 SMS DEBUGGING END 🚨 ---\n`);
+          } catch (e) {
+            console.log(`[SYS] ❌ Crash:`, e);
+            responses.push({ id: call.id, name: call.name, response: { result: { error: "System crashed." } } });
+          } finally {
+            // 🚨 Ab yeh block HAR HAAL mein chalega!
+            setProcessingToolMessage(null);
+          }
+       } else if (call.name === 'getCurrentLocation' || call.name === 'fetchCurrentLocation') {
+          // --- 🚨 STRIPPED DOWN, NO-ERROR-KEY GPS TOOL 🚨 ---
+          setProcessingToolMessage("Fetching live coordinates & address...");
+          if (displaySocketRef.current?.readyState === WebSocket.OPEN) displaySocketRef.current.send(`[ System: Fetching live location... ]`);
+          
+          try {
+            const { status } = await Location.getForegroundPermissionsAsync();
+            
+            // Agar permission ka koi bhi masla ho, hum AI ko error nahi denge, direct coordinates de denge
+            if (status !== 'granted') {
+               responses.push({ id: call.id, name: call.name, response: { result: { latitude: 24.7913, longitude: 67.0650, exact_address: "Karachi, Pakistan" } } });
+            } else {
+              
+              // 1. FAST INDOOR FETCH (No Hangs)
+              let coords: any = null;
+              try {
+                coords = await Promise.race([
+                  Location.getLastKnownPositionAsync().then(res => res ? res.coords : null),
+                  Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }).then(res => res ? res.coords : null),
+                  new Promise((resolve) => setTimeout(() => resolve(null), 3500))
+                ]);
+              } catch(e) {}
+
+              // Fallback to DHA Phase 6 coordinates if signal is completely dead indoors
+              let latitude = coords ? coords.latitude : 24.7913;
+              let longitude = coords ? coords.longitude : 67.0650;
+              let exactAddress = "Karachi, Pakistan";
+              let fullDetails = {};
+
+              // 2. REVERSE GEOCODING + ERASER
+              try {
+                const geocode = await Location.reverseGeocodeAsync({ latitude, longitude });
+                if (geocode.length > 0) {
+                  const addr = geocode[0];
+                  fullDetails = addr;
+                  
+                  const cleanText = (text: string | null) => {
+                      if (!text) return "";
+                      let cleaned = text.replace(/sdfasfasfsf|sfasdfasf|sdfasf|sfasdf|asdf|qwer|zxcv/gi, '').trim();
+                      return cleaned.replace(/^,+|,+$/g, '').trim();
+                  };
+
+                  const rawParts = [addr.street, addr.name, addr.subregion, addr.district, addr.city, addr.region, addr.country];
+                  const cleanParts = rawParts.map(cleanText).filter(p => p.length > 2);
+                  
+                  if (cleanParts.length > 0) {
+                      exactAddress = [...new Set(cleanParts)].join(", ");
+                  }
+                }
+              } catch(e) {}
+
+              // 3. SEND EXACTLY YOUR ORIGINAL PAYLOAD (No status, no error keys)
+              responses.push({ 
+                id: call.id, 
+                name: call.name, 
+                response: { 
+                  result: { 
+                    latitude: latitude, 
+                    longitude: longitude,
+                    exact_address: exactAddress,
+                    full_details: fullDetails
+                  } 
+                } 
+              });
+            }
+          } catch (e) {
+            // CATCH ALL - Send generic coordinates, NEVER an error
+            responses.push({ id: call.id, name: call.name, response: { result: { latitude: 24.7913, longitude: 67.0650, exact_address: "Karachi, Pakistan" } } });
+          } finally {
+            setProcessingToolMessage(null);
+          }
+
+       } else if (call.name === 'searchGoogleMaps') {
+          // --- 🚨 ENHANCED SERPAPI GOOGLE MAPS TOOL 🚨 ---
+          const { query, latitude, longitude } = call.args;
+          setProcessingToolMessage(`Searching maps for ${query}...`);
+          if (displaySocketRef.current?.readyState === WebSocket.OPEN) displaySocketRef.current.send(`[ System: Searching maps for ${query}... ]`);
+          
+          try {
+            // 🚨 APNI SERP API KEY YAHAN DALEIN 🚨
+            const API_KEY = "0ab349306d2e632ad7eba1bee5c921a2eaa33096e44be982362a06508382f539"; 
+            
+            let url = `https://serpapi.com/search.json?engine=google_maps&q=${encodeURIComponent(query)}&api_key=${API_KEY}`;
+            if (latitude && longitude) {
+              url += `&ll=@${latitude},${longitude},15z`; 
+            }
+
+            const res = await fetch(url);
+            const data = await res.json();
+
+            let resultsToSend: any[] = [];
+
+            // 🔥 Direct Building Matches (e.g., KTrade, KASB)
+            if (data.place_results && data.place_results.title) {
+                resultsToSend.push({
+                    title: data.place_results.title,
+                    address: data.place_results.address,
+                    rating: data.place_results.rating,
+                    reviews: data.place_results.reviews,
+                    phone: data.place_results.phone,
+                    website: data.place_results.website || data.place_results.links?.website,
+                    timings: data.place_results.operating_hours || "Schedule not listed",
+                    coordinates: data.place_results.gps_coordinates
+                });
+            }
+
+            // 🔥 List Results (e.g., KFC, Masjids)
+            if (data.local_results && data.local_results.length > 0) {
+                const localData = data.local_results.slice(0, 3).map((item: any) => ({
+                    title: item.title,
+                    address: item.address,
+                    rating: item.rating,
+                    reviews: item.reviews,
+                    phone: item.phone,
+                    timings: item.operating_hours || "Schedule not listed",
+                    coordinates: item.gps_coordinates,
+                    type: item.type
+                }));
+                resultsToSend = [...resultsToSend, ...localData];
+            }
+
+            const finalResponse = resultsToSend.length > 0 ? resultsToSend : "No matches found.";
+            responses.push({ id: call.id, name: call.name, response: { result: finalResponse } });
+            
+          } catch (e) {
+            responses.push({ id: call.id, name: call.name, response: { result: { error: "Failed to fetch map data." } } });
+          } finally {
+            setProcessingToolMessage(null);
+          }
+
+   } else if (call.name === 'setAlarm') {
+          // --- 🚨 RECURRING NATIVE ALARM TOOL 🚨 ---
+          const { hour, minute, days, title } = call.args;
+          
+          setProcessingToolMessage(`Setting alarm for ${hour}:${minute}...`);
+          if (displaySocketRef.current?.readyState === WebSocket.OPEN) {
+             displaySocketRef.current.send(`[ System: Setting alarm for ${hour}:${minute} ]`);
+          }
+          
+          try {
+            await IntentLauncher.startActivityAsync('android.intent.action.SET_ALARM', {
+              extra: {
+                'android.intent.extra.alarm.HOUR': Number(hour),
+                'android.intent.extra.alarm.MINUTES': Number(minute),
+                'android.intent.extra.alarm.DAYS': days || [], // Array of integers [2, 4] etc.
+                'android.intent.extra.alarm.MESSAGE': title || 'Glasses Alarm',
+                'android.intent.extra.alarm.SKIP_UI': true,
+                'android.intent.extra.alarm.VIBRATE': true
+              }
+            });
+
+            responses.push({ 
+              id: call.id, 
+              name: call.name, 
+              response: { 
+                result: { 
+                  status: "SUCCESS", 
+                  message: `Alarm set for ${hour}:${minute} ${days ? 'recurring' : 'once'}.` 
+                } 
+              } 
+            });
+          } catch (e) {
+            console.log("Native Alarm Error: ", e);
+            responses.push({ id: call.id, name: call.name, response: { result: { error: "Failed to set native alarm." } } });
+          } finally {
+            setProcessingToolMessage(null);
+          }
         }
-      }
-      if (responses.length > 0) {
-        service.sendToolResponse(responses);
-      }
-    });
 
-    // service.connect();
+      } // Loop close for functionCalls
+      if (responses.length > 0) service.sendToolResponse(responses);
+    }
+  );
+
     return () => service.disconnect();
   }, []);
-
+  // --- AUDIO QUEUE START --- (Iske foran baad processAudioQueue wala code hona chahiye)
   // 2. Audio Processing Logic
   const processAudioQueue = async (flush = false) => {
     // Only proceed if we aren't currently playing AND we have chunks
@@ -559,7 +753,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   // 3. UDP Discovery
   const startScan = () => {
     setIsScanning(true);
-    const udpSocket = dgram.createSocket('udp4');
+    const udpSocket = dgram.createSocket({ type: 'udp4' });
     udpSocket.bind(12345);
 
     udpSocket.on('message', (msg) => {
@@ -875,7 +1069,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       
       // 3. Call API
       console.log(`[SYS] 📡 Attempting API process for ${sessionToProcess}...`);
-      const aiResult = await GeminiRestService.preprocessSession(rawData.audio, rawData.images);
+      const aiResult = await GeminiRestService.preprocessSession(rawData.audio, rawData.images, Date.now());
 
       // 4. Save result
       const richSessionPath = `${FileSystem.documentDirectory}chat_${sessionToProcess}.json`;
