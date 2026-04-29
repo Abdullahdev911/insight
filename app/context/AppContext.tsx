@@ -8,7 +8,7 @@ import { GeminiLiveService } from '../services/GeminiLiveService';
 import { GeminiRestService } from '../services/GeminiRestService';
 
 // ⚠️ Ensure your API key is loaded
-const API_KEY = ""
+const API_KEY = process.env.EXPO_PUBLIC_GEMINI_KEY || "";
 
 // --- WAV BATCHING UTILITY ---
 const createWavFromChunks = (base64Chunks: string[], sampleRate: number = 24000): string => {
@@ -345,8 +345,16 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const audioQueue = useRef<string[]>([]);
   const isPlaying = useRef(false);
 
-  // 1. Initialize Gemini ONCE when app starts
+  // 1. Initialize Audio and Gemini ONCE when app starts
   useEffect(() => {
+    // Enable background audio persistence
+    Audio.setAudioModeAsync({
+      staysActiveInBackground: true,
+      shouldDuckAndroid: true,
+      playsThroughEarpieceAndroid: false,
+      allowsRecordingIOS: true, // Needed if we ever use phone mic
+    }).catch(e => console.error("[SYS] Audio Mode Setup Failed:", e));
+
     const service = new GeminiLiveService(API_KEY);
     geminiServiceRef.current = service;
 

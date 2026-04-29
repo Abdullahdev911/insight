@@ -76,6 +76,7 @@ export class GeminiLiveService {
 
     this.ws.onclose = (e) => {
       console.log(`[SYS] 🛑 Gemini Disconnected: Code ${e.code}, Reason: ${e.reason || 'No reason'}`);
+      this.stopHeartbeat(); // Stop heartbeat on close
       this.isConnected = false;
       this.ws = null;
 
@@ -107,7 +108,35 @@ export class GeminiLiveService {
     };
   }
 
+  private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastVoiceName: string = 'Zephyr';
+
+  private startHeartbeat() {
+    this.stopHeartbeat();
+    // Send a "noop" message every 30 seconds to keep the socket alive in the pocket
+    this.heartbeatTimer = setInterval(() => {
+      if (this.isConnected && this.ws?.readyState === WebSocket.OPEN) {
+        // We send a tiny silent audio chunk or an empty clientContent turn to keep the pipe open
+        // Gemini Live expects specific formats. An empty realtimeInput is usually safe.
+        try {
+          this.ws.send(JSON.stringify({ realtimeInput: { mediaChunks: [] } }));
+        } catch (e) {
+          console.warn("[SYS] Heartbeat failed:", e);
+        }
+      }
+    }, 30000);
+  }
+
+  private stopHeartbeat() {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
   private sendSetupMessage(model: string, latLng?: { latitude: number; longitude: number }, voiceName: string = 'Zephyr') {
+    this.lastVoiceName = voiceName;
+    this.startHeartbeat(); // Start heartbeat after setup
     // 1. Define the Persona & THE IRONCLAD SCRIPT BAN
     const baseSystemPrompt = `You are Insight, an advanced AI assistant powering a pair of smart glasses. 
 Your responses are delivered via an audio speaker and a small OLED display, so keep your answers concise, natural, and highly conversational. 
@@ -366,6 +395,7 @@ CRITICAL TRANSCRIPTION & LANGUAGE LOCK: The user will strictly and exclusively s
 
   disconnect() {
     this.intentionalDisconnect = true;
+    this.stopHeartbeat();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
