@@ -8,7 +8,7 @@ import { GeminiLiveService } from '../services/GeminiLiveService';
 import { GeminiRestService } from '../services/GeminiRestService';
 
 // ⚠️ Ensure your API key is loaded
-const API_KEY = "AIzaSyCNt7d3ccGJPkY4EnMevksDyqEJ42TaQNM"
+const API_KEY = ""
 
 // --- WAV BATCHING UTILITY ---
 const createWavFromChunks = (base64Chunks: string[], sampleRate: number = 24000): string => {
