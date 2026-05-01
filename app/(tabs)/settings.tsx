@@ -6,6 +6,8 @@ import { useApp } from './../context/AppContext';
 export default function SettingsScreen() {
   const { 
     isLocationEnabled, setIsLocationEnabled, 
+    isDisplayEnabled, setIsDisplayEnabled,
+    isAudioEnabled, setIsAudioEnabled,
     geminiVoice, setGeminiVoice,
     isPassiveMode, togglePassiveMode 
   } = useApp();
@@ -86,6 +88,14 @@ export default function SettingsScreen() {
                 <View className="p-4 flex-row justify-between items-center border-b border-white/5">
                     <Text className="text-text font-medium">Allow Location Access</Text>
                     <Switch trackColor={{ false: "#334155", true: "#06b6d4" }} thumbColor={"#f8fafc"} value={isLocationEnabled} onValueChange={setIsLocationEnabled} />
+                </View>
+                <View className="p-4 flex-row justify-between items-center border-b border-white/5">
+                    <Text className="text-text font-medium">Enable OLED Display</Text>
+                    <Switch trackColor={{ false: "#334155", true: "#06b6d4" }} thumbColor={"#f8fafc"} value={isDisplayEnabled} onValueChange={setIsDisplayEnabled} />
+                </View>
+                <View className="p-4 flex-row justify-between items-center border-b border-white/5">
+                    <Text className="text-text font-medium">Enable Audio Output</Text>
+                    <Switch trackColor={{ false: "#334155", true: "#06b6d4" }} thumbColor={"#f8fafc"} value={isAudioEnabled} onValueChange={setIsAudioEnabled} />
                 </View>
                 <View className="p-4 flex-row justify-between items-center">
                     <Text className="text-text font-medium">API Key Config</Text>
