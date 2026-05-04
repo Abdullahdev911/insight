@@ -4,7 +4,7 @@
  * Memory querying, and Image Generation via Nano Banana 2.
  */
 
-const API_KEY = "AIzaSyCNt7d3ccGJPkY4EnMevksDyqEJ42TaQNM"; // Make sure to put your actual API key here!
+const API_KEY = ""; // Make sure to put your actual API key here!
 const MODEL = "gemini-2.5-flash";
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${API_KEY}`;
 

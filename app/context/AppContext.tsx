@@ -13,7 +13,7 @@ import { GeminiRestService } from '../services/GeminiRestService';
 import SmsAndroid from 'react-native-get-sms-android';
 
 // ⚠️ Ensure your API key is loaded
-const API_KEY = "AIzaSyCNt7d3ccGJPkY4EnMevksDyqEJ42TaQNM"
+const API_KEY = ""
 
 // --- WAV BATCHING UTILITY ---
 const createWavFromChunks = (base64Chunks: string[], sampleRate: number = 24000): string => {
@@ -120,6 +120,10 @@ interface AppContextType {
   searchSources: { title: string, uri: string }[];
   isLocationEnabled: boolean;
   setIsLocationEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+  isDisplayEnabled: boolean;
+  setIsDisplayEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+  isAudioEnabled: boolean;
+  setIsAudioEnabled: React.Dispatch<React.SetStateAction<boolean>>;
   geminiVoice: string;
   setGeminiVoice: (voice: string) => void;
   processingToolMessage: string | null;
@@ -310,6 +314,10 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [isLocationEnabled, setIsLocationEnabled] = useState(false);
   const locationEnabledRef = useRef(false);
   const lastLocationRef = useRef<{ latitude: number, longitude: number } | null>(null);
+  const [isDisplayEnabled, setIsDisplayEnabled] = useState(true);
+  const isDisplayEnabledRef = useRef(true);
+  const [isAudioEnabled, setIsAudioEnabled] = useState(true);
+  const isAudioEnabledRef = useRef(true);
 
   useEffect(() => {
     // Load session history on mount
@@ -346,6 +354,26 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       lastLocationRef.current = null;
     }
   }, [isLocationEnabled]);
+
+  useEffect(() => {
+    isDisplayEnabledRef.current = isDisplayEnabled;
+    if (displaySocketRef.current?.readyState === WebSocket.OPEN) {
+      displaySocketRef.current.send(isDisplayEnabled ? "CMD:DISPLAY_ON" : "CMD:DISPLAY_OFF");
+    }
+  }, [isDisplayEnabled]);
+
+  useEffect(() => {
+    isAudioEnabledRef.current = isAudioEnabled;
+    // Clear any queued audio immediately when muted
+    if (!isAudioEnabled) {
+      audioQueue.current = [];
+    }
+
+    if (displaySocketRef.current?.readyState === WebSocket.OPEN) {
+      displaySocketRef.current.send(isAudioEnabled ? "CMD:SPEAKER_ON" : "CMD:SPEAKER_OFF");
+    }
+  }, [isAudioEnabled]);
+
 
   // --- AUDIO QUEUE ---
   const audioQueue = useRef<string[]>([]);
@@ -608,7 +636,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
           
           try {
             // 🚨 APNI SERP API KEY YAHAN DALEIN 🚨
-            const API_KEY = "0ab349306d2e632ad7eba1bee5c921a2eaa33096e44be982362a06508382f539"; 
+            const API_KEY = ""; 
             
             let url = `https://serpapi.com/search.json?engine=google_maps&q=${encodeURIComponent(query)}&api_key=${API_KEY}`;
             if (latitude && longitude) {
@@ -707,6 +735,9 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   // --- AUDIO QUEUE START --- (Iske foran baad processAudioQueue wala code hona chahiye)
   // 2. Audio Processing Logic
   const processAudioQueue = async (flush = false) => {
+
+    if (!isAudioEnabledRef.current) { audioQueue.current = []; return; }
+
     // Only proceed if we aren't currently playing AND we have chunks
     if (isPlaying.current || audioQueue.current.length === 0) return;
 
@@ -1175,7 +1206,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       startScan, startScanMock, isScanning, cameraIP, displayIP, isFullyConnected: !!(cameraIP && displayIP),
       images, isConnected, status, userTranscript, responseText, sendText, simulateBurst, chatHistory, setChatHistory,
       sessionHistory, createNewChat, loadChat, deleteChat,
-      searchSources, isLocationEnabled, setIsLocationEnabled, processingToolMessage, geminiVoice, setGeminiVoice,
+      searchSources, isLocationEnabled, setIsLocationEnabled, isDisplayEnabled, setIsDisplayEnabled, isAudioEnabled, setIsAudioEnabled, processingToolMessage, geminiVoice, setGeminiVoice,
       isPassiveMode, togglePassiveMode, isProcessingPassive, passiveCountdown
     }}>
       {children}
