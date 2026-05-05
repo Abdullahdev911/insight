@@ -13,7 +13,7 @@ import { GeminiRestService } from '../services/GeminiRestService';
 import SmsAndroid from 'react-native-get-sms-android';
 
 // ⚠️ Ensure your API key is loaded
-const API_KEY = process.env.EXPO_PUBLIC_GEMINI_KEY || "AIzaSyDE1WkDbUao4dYbh8SKLYWSNeWvVXwudyU";
+const API_KEY = process.env.EXPO_PUBLIC_GEMINI_KEY || "";
 
 // --- WAV BATCHING UTILITY ---
 const createWavFromChunks = (base64Chunks: string[], sampleRate: number = 24000): string => {
@@ -643,7 +643,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
           
           try {
             // 🚨 APNI SERP API KEY YAHAN DALEIN 🚨
-            const API_KEY = "0d423c71416e59ce94309685d303beda15b666db5429643f462f35aa7cc96116"; 
+            const API_KEY = ""; 
             
             let url = `https://serpapi.com/search.json?engine=google_maps&q=${encodeURIComponent(query)}&api_key=${API_KEY}`;
             if (latitude && longitude) {
