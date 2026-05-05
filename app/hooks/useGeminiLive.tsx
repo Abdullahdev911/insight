@@ -5,7 +5,7 @@ import { GeminiLiveService } from '../services/GeminiLiveService';
 import { createWavHeader } from '../utils/audioUtils';
 
 // ⚠️ Use ENV variable
-const API_KEY = process.env.EXPO_PUBLIC_GEMINI_KEY || "";
+const API_KEY = process.env.EXPO_PUBLIC_GEMINI_KEY || "AIzaSyDE1WkDbUao4dYbh8SKLYWSNeWvVXwudyU";
 
 export default function useGeminiLive() {
   const serviceRef = useRef<GeminiLiveService | null>(null);

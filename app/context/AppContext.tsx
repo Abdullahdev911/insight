@@ -13,7 +13,7 @@ import { GeminiRestService } from '../services/GeminiRestService';
 import SmsAndroid from 'react-native-get-sms-android';
 
 // ⚠️ Ensure your API key is loaded
-const API_KEY = process.env.EXPO_PUBLIC_GEMINI_KEY || "";
+const API_KEY = process.env.EXPO_PUBLIC_GEMINI_KEY || "AIzaSyDE1WkDbUao4dYbh8SKLYWSNeWvVXwudyU";
 
 // --- WAV BATCHING UTILITY ---
 const createWavFromChunks = (base64Chunks: string[], sampleRate: number = 24000): string => {
@@ -643,7 +643,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
           
           try {
             // 🚨 APNI SERP API KEY YAHAN DALEIN 🚨
-            const API_KEY = ""; 
+            const API_KEY = "0d423c71416e59ce94309685d303beda15b666db5429643f462f35aa7cc96116"; 
             
             let url = `https://serpapi.com/search.json?engine=google_maps&q=${encodeURIComponent(query)}&api_key=${API_KEY}`;
             if (latitude && longitude) {
@@ -694,44 +694,70 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
           }
 
    } else if (call.name === 'setAlarm') {
-          // --- 🚨 RECURRING NATIVE ALARM TOOL 🚨 ---
-          const { hour, minute, days, title } = call.args;
-          
-          setProcessingToolMessage(`Setting alarm for ${hour}:${minute}...`);
-          if (displaySocketRef.current?.readyState === WebSocket.OPEN) {
-             displaySocketRef.current.send(`[ System: Setting alarm for ${hour}:${minute} ]`);
-          }
-          
-          try {
-            await IntentLauncher.startActivityAsync('android.intent.action.SET_ALARM', {
-              extra: {
-                'android.intent.extra.alarm.HOUR': Number(hour),
-                'android.intent.extra.alarm.MINUTES': Number(minute),
+    // --- 🚨 RECURRING NATIVE ALARM TOOL (FIXED FOR LIVE TIME) 🚨 ---
+    const { hour, minute, days, title, delayInMinutes } = call.args;
+    
+    let finalHour = Number(hour);
+    let finalMinute = Number(minute);
+
+    // JADOO YAHAN HAI: Agar AI ne delay bheja hai (jaise "in 10 mins"), 
+    // toh aapka phone khud live time check karke usme minutes add karega
+    if (delayInMinutes !== undefined && delayInMinutes !== null) {
+        const now = new Date();
+        now.setMinutes(now.getMinutes() + Number(delayInMinutes));
+        finalHour = now.getHours();
+        finalMinute = now.getMinutes();
+    }
+    
+    setProcessingToolMessage(`Setting alarm for ${finalHour}:${finalMinute}...`);
+    if (displaySocketRef.current?.readyState === WebSocket.OPEN) {
+        displaySocketRef.current.send(`[ System: Setting alarm for ${finalHour}:${finalMinute} ]`);
+    }
+    
+    try {
+        await IntentLauncher.startActivityAsync('android.intent.action.SET_ALARM', {
+            extra: {
+                'android.intent.extra.alarm.HOUR': finalHour,
+                'android.intent.extra.alarm.MINUTES': finalMinute,
                 'android.intent.extra.alarm.DAYS': days || [], // Array of integers [2, 4] etc.
                 'android.intent.extra.alarm.MESSAGE': title || 'Glasses Alarm',
                 'android.intent.extra.alarm.SKIP_UI': true,
                 'android.intent.extra.alarm.VIBRATE': true
-              }
-            });
+            }
+        });
 
-            responses.push({ 
-              id: call.id, 
-              name: call.name, 
-              response: { 
+        responses.push({ 
+            id: call.id, 
+            name: call.name, 
+            response: { 
                 result: { 
-                  status: "SUCCESS", 
-                  message: `Alarm set for ${hour}:${minute} ${days ? 'recurring' : 'once'}.` 
+                    status: "SUCCESS", 
+                    message: `Alarm set for ${finalHour}:${finalMinute} ${days ? 'recurring' : 'once'}.` 
                 } 
-              } 
-            });
-          } catch (e) {
-            console.log("Native Alarm Error: ", e);
-            responses.push({ id: call.id, name: call.name, response: { result: { error: "Failed to set native alarm." } } });
-          } finally {
-            setProcessingToolMessage(null);
-          }
-        }
-
+            } 
+        });
+    } catch (e) {
+        console.log("Native Alarm Error: ", e);
+        responses.push({ id: call.id, name: call.name, response: { result: { error: "Failed to set native alarm." } } });
+    } finally {
+        setProcessingToolMessage(null);
+    }
+} else if (call.name === 'getCurrentTime') {
+    // Phone se exact live time nikal rahe hain
+    const now = new Date();
+    const liveTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    
+    responses.push({ 
+        id: call.id, 
+        name: call.name, 
+        response: { 
+            result: { 
+                currentTime: liveTime,
+                message: `The exact live time right now is ${liveTime}.`
+            } 
+        } 
+    });
+}
       } // Loop close for functionCalls
       if (responses.length > 0) service.sendToolResponse(responses);
     }

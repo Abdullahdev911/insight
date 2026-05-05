@@ -237,22 +237,42 @@ CRITICAL TRANSCRIPTION & LANGUAGE LOCK: The user will strictly and exclusively s
                   required: ["query"]
                 }
               },
-              {
+            {
                 name: "setAlarm",
-                description: "Sets a recurring or one-time alarm at a specific time. Call this when the user asks to set an alarm or reminder for a specific time or day.",
+                description: "Sets a recurring or one-time alarm. Use 'hour' and 'minute' for absolute times (e.g., 5:00 PM). Use 'delayInMinutes' for relative times (e.g., 'in 10 minutes', 'after an hour').",
                 parameters: {
                   type: "OBJECT",
                   properties: {
-                    hour: { type: "NUMBER", description: "Hour in 24-hour format (0-23)." },
-                    minute: { type: "NUMBER", description: "Minutes (0-59)." },
+                    hour: { 
+                      type: "NUMBER", 
+                      description: "Hour in 24-hour format (0-23). Use ONLY for exact absolute times." 
+                    },
+                    minute: { 
+                      type: "NUMBER", 
+                      description: "Minutes (0-59). Use ONLY for exact absolute times." 
+                    },
+                    delayInMinutes: { 
+                      type: "NUMBER", 
+                      description: "Relative delay in minutes. Use this INSTEAD of hour/minute if the user asks to set an alarm in a relative time amount (e.g., 'in 5 minutes', 'after half an hour')." 
+                    },
                     days: { 
                       type: "ARRAY", 
                       items: { type: "NUMBER" }, 
                       description: "Days of week: 1=Sunday, 2=Monday, 3=Tuesday, 4=Wednesday, 5=Thursday, 6=Friday, 7=Saturday. Leave empty for a one-time alarm." 
                     },
-                    title: { type: "STRING", description: "Title of the alarm (e.g., 'Wake up', 'Medicine time')." }
-                  },
-                  required: ["hour", "minute"]
+                    title: { 
+                      type: "STRING", 
+                      description: "Title of the alarm (e.g., 'Wake up', 'Medicine time')." 
+                    }
+                  }
+                }
+              },
+              {
+                name: "getCurrentTime",
+                description: "Fetches the exact live current time from the user's device. Call this tool whenever the user asks for the current time.",
+                parameters: {
+                  type: "OBJECT",
+                  properties: {}
                 }
               }
             ]
